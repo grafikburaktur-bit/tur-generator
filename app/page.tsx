@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 
 const ICON_BASE_URL =
   "https://www.buraktur.com/AlbumMedia/ckUpload/images/icon/";
@@ -264,6 +264,13 @@ export default function TurOlusturucu() {
   const [copiedTab, setCopiedTab] = useState<string | null>(null);
   const [copiedCardId, setCopiedCardId] = useState<number | string | null>(null);
 
+  // MODAL / PDF AKTARMA STATELERİ
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [isPdfLoading, setIsPdfLoading] = useState(false);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // --- HERO İŞLEMLERİ ---
   const addFeature = () => {
     setHero({ ...hero, features: [...hero.features, "Yeni Özellik"] });
@@ -442,6 +449,297 @@ export default function TurOlusturucu() {
   };
   const removeImportantItem = (idx: number) => {
     setImportantNotes(importantNotes.filter((_, i) => i !== idx));
+  };
+
+  // =========================================================================
+  // AKILLI PDF / METİN PARSER (AYRIŞTIRICI) MOTORU
+  // =========================================================================
+  const parseAndApplyTourText = (rawText: string) => {
+    if (!rawText || !rawText.trim()) {
+      alert("Lütfen önce bir PDF yükleyin veya metin yapıştırın!");
+      return;
+    }
+
+    try {
+      const cleanText = rawText.replace(/\r\n/g, "\n");
+
+      // 1. DAHİL VE HARİÇ HİZMETLERİ BUL
+      let daysSection = cleanText;
+      let incItems: string[] = [];
+      let excItems: string[] = [];
+
+      const incMatch = cleanText.search(/(?:Fiyata\s+)?Dahil\s+Olan\s+Hizmetler/i);
+      const excMatch = cleanText.search(/(?:Fiyata\s+)?Dahil\s+Olmayan\s+Hizmetler|Hariç\s+Hizmetler/i);
+
+      if (incMatch !== -1) {
+        daysSection = cleanText.substring(0, incMatch);
+        const incEnd = excMatch !== -1 && excMatch > incMatch ? excMatch : cleanText.length;
+        const incText = cleanText.substring(incMatch, incEnd);
+        incItems = incText
+          .split("\n")
+          .map((l) => l.replace(/^[•\*\-\–\—\s]+/, "").trim())
+          .filter((l) => l.length > 5 && !/Dahil\s+Olan\s+Hizmetler/i.test(l));
+      }
+
+      if (excMatch !== -1) {
+        const excText = cleanText.substring(excMatch);
+        excItems = excText
+          .split("\n")
+          .map((l) => l.replace(/^[•\*\-\–\—\s]+/, "").trim())
+          .filter((l) => l.length > 5 && !/Dahil\s+Olmayan\s+Hizmetler|Hariç\s+Hizmetler/i.test(l));
+      }
+
+      // 2. BAŞLIK VE ALT BAŞLIK TAHMİNİ
+      const lines = daysSection
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0 && !/BURAK\s*TUR|0850|www\.buraktur|Faks:|İzmir:|İstanbul:/i.test(l));
+
+      let detectedTitle = hero.title;
+      let detectedSubtitle = hero.subtitle;
+
+      // "1. Gün" den önceki satırlardan başlık ve şehirleri yakala
+      const firstDayIdx = lines.findIndex((l) => /(?:1\.\s*G[üu]n|Bulu[şs]ma)/i.test(l));
+      if (firstDayIdx > 0) {
+        const preLines = lines.slice(0, firstDayIdx);
+        if (preLines.length === 1) {
+          detectedTitle = preLines[0];
+        } else if (preLines.length >= 2) {
+          detectedTitle = preLines[0];
+          detectedSubtitle = preLines.slice(1).join(", ");
+        }
+      }
+
+      // 3. GÜNLERİ AYRIŞTIR
+      const dayRegex = /(?:^|\n)\s*(?:(\d+)\.\s*G[üu]n|Bulu[şs]ma)(?:\s+[^\n:]+)?[:\-–—]\s*([^\n]+)/gi;
+      const matches: { full: string; dayNum?: string; routeStr: string; index: number; length: number }[] = [];
+      let match;
+
+      while ((match = dayRegex.exec(daysSection)) !== null) {
+        matches.push({
+          full: match[0],
+          dayNum: match[1],
+          routeStr: match[2].trim(),
+          index: match.index,
+          length: match[0].length,
+        });
+      }
+
+      const parsedDays: DayData[] = [];
+
+      matches.forEach((m, i) => {
+        const start = m.index + m.length;
+        const end = i < matches.length - 1 ? matches[i + 1].index : daysSection.length;
+        let dayRaw = daysSection.substring(start, end).trim();
+
+        // Footer / Acente adreslerini temizle
+        dayRaw = dayRaw
+          .split("\n")
+          .filter((l) => !/BURAK\s*TUR|0850\s*304|www\.buraktur|Faks:|Ergenekon\s*Mah|Akdeniz\s*Mah/i.test(l))
+          .join("\n")
+          .trim();
+
+        // Önemli Notları Ayıkla
+        const notes: string[] = [];
+        dayRaw = dayRaw
+          .replace(/(?:^|\n)\s*(?:Önemli|Not|Dikkat)\s*:\s*([^\n]+)/gi, (_, noteText) => {
+            notes.push(noteText.trim());
+            return "";
+          })
+          .trim();
+
+        // Rota ve durakları belirle
+        // "İstanbul – Hanoi", "Hanoi – Ha Long Bay - Cruise"
+        let stops = m.routeStr
+          .split(/\s*[\u2013\u2014\-–—>]+\s*/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+
+        if (stops.length === 0) stops = [m.routeStr];
+
+        // İkon tahmin motoru
+        const lowerContent = (m.routeStr + " " + dayRaw).toLowerCase();
+        const routes: RouteNode[] = stops.map((stop, sIdx) => {
+          let icon = "bus.png";
+          if (sIdx < stops.length - 1) {
+            if (/uçak|uçuş|havalimanı|sefer|uçuyoruz|thy|tk\d|ek\d/i.test(lowerContent)) {
+              icon = "airplane.png";
+            } else if (/cruise|gemi|tekne|körfez|kano|sampan|feribot/i.test(lowerContent)) {
+              icon = "ship.png";
+            } else if (/tren|demiryolu|yht|station/i.test(lowerContent)) {
+              icon = "train.png";
+            }
+          } else {
+            icon = "";
+          }
+          return {
+            id: generateId(),
+            location: stop,
+            iconToNext: icon,
+          };
+        });
+
+        parsedDays.push({
+          id: i + 1,
+          type: m.dayNum ? "day" : "meeting",
+          dayTitle: m.dayNum ? `${m.dayNum}. Gün` : "Buluşma",
+          routes: routes,
+          content: dayRaw,
+          imageUrl: "",
+          notes: notes,
+        });
+      });
+
+      // EĞER HİÇ GÜN BULUNAMADIYSA BİLGİLENDİR
+      if (parsedDays.length === 0) {
+        alert(
+          "Gün başlıkları (örn: '1. Gün: İstanbul – Hanoi') algılanamadı. Lütfen metnin '1. Gün' veya 'Buluşma' içerdiğinden emin olun."
+        );
+        return;
+      }
+
+      // BAŞARIYLA UYGULA
+      setHero({
+        ...hero,
+        title: detectedTitle,
+        subtitle: detectedSubtitle,
+        duration: `${parsedDays.length} Günlük Program`,
+      });
+      setDays(parsedDays);
+      if (incItems.length > 0) setIncludedServices(incItems);
+      if (excItems.length > 0) setExcludedServices(excItems);
+
+      setIsImportModalOpen(false);
+      setActiveTab("program");
+      setImportMessage(`✓ Harika! ${parsedDays.length} Gün, Dahil ve Hariç hizmetler başarıyla yüklendi.`);
+      setTimeout(() => setImportMessage(null), 5000);
+    } catch (err: any) {
+      alert("Ayrıştırma sırasında bir hata oluştu: " + err.message);
+    }
+  };
+
+  // PDF DOSYASINI OKUMA FONKSİYONU
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
+      setIsPdfLoading(true);
+      try {
+        // PDF.js'i CDN üzerinden dinamik yükle (bundle boyutu şişmez)
+        // @ts-ignore
+        if (!window.pdfjsLib) {
+          await new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+            script.onload = resolve;
+            script.onerror = reject;
+            document.head.appendChild(script);
+          });
+          // @ts-ignore
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+            "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        }
+
+        const arrayBuffer = await file.arrayBuffer();
+        // @ts-ignore
+        const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        let extracted = "";
+
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          let lastY: number | null = null;
+          let pageText = "";
+          for (const item of textContent.items) {
+            if ("str" in item) {
+              if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) {
+                pageText += "\n";
+              } else if (pageText && !pageText.endsWith(" ") && !item.str.startsWith(" ")) {
+                pageText += " ";
+              }
+              pageText += item.str;
+              lastY = item.transform[5];
+            }
+          }
+          extracted += pageText + "\n\n";
+        }
+
+        setImportText(extracted);
+      } catch (err: any) {
+        alert("PDF okunamadı: " + err.message + ". Metni kopyalayıp aşağıdaki kutucuğa yapıştırabilirsiniz.");
+      } finally {
+        setIsPdfLoading(false);
+      }
+    } else {
+      // Düz metin dosyası ise
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        setImportText(event.target?.result as string);
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  // DEMO METNİ YÜKLEME (VIETNAM TURU)
+  const loadDemoVietnamTour = () => {
+    const demo = `BURAK TUR
+VİETNAM, KAMBOÇYA, LAOS, TAYLAND TURU
+Hanoi, Ha Long Bay, Ho Chi Minh (Saigon), Siem Reap, Luang Prabang, Bangkok
+
+1. Gün 3 Aralık 2026 Perşembe: İstanbul – Hanoi
+İstanbul Yeni Havalimanı Dış Hatlar Terminali Giden Yolcu Salonu "THY" bankosunda 00.01’de buluşuyoruz. Check-in, pasaport ve gümrük işlemleri sonrası THY'nin TK0252 seferi ile 18.05’te Vietnam'ın Hanoi şehrine uçuyoruz (9sa 30dk).
+
+2. Gün 4 Aralık 2026 Cuma: Hanoi
+Varış: 07.05. Varışı müteakip yapılacak şehir turumuzda Ho Chi Minh Mozolesi, Başkanlık Sarayı, Edebiyat Tapınağı, eskiden bir hapishane olan Hoa Lo, Eski Mahalle, Hanoi Tren Sokağı, Kral Ly Thai To Heykeli, Ngoc Son Tapınağı ve Hoan Kiem Gölü göreceğimiz yerler arasındadır. Serbest zamanın ardından akşam yemeği sonrası konaklama otelimizde.
+
+3. Gün 5 Aralık 2026 Cumartesi: Hanoi – Ha Long Bay - Cruise
+Otelde alacağımız kahvaltının ardından UNESCO Dünya Mirası Listesi'nde yer alan ve dünyanın en etkileyici doğal oluşumlarından biri kabul edilen Ha Long Bay'e hareket ediyoruz (155 km). Varışımızın ardından cruise gemimize geçerek unutulmaz körfez yolculuğumuza başlıyoruz. Gemide alacağımız öğle yemeği eşliğinde binlerce kireçtaşı adacığı arasında eşsiz manzaraların tadını çıkarıyoruz. Programımız kapsamında mağara ziyaretleri, bambu teknesi veya kano aktiviteleri ve körfezin saklı koylarını keşfetme imkânı buluyoruz. Akşam yemeği sonrası konaklama cruise gemimizde.
+
+4. Gün 6 Aralık 2026 Pazar: Ha Long Bay - Hanoi – Ho Chi Minh (Saigon)
+Cruise gemisinde alacağımız kahvaltının ardından Hanoi Havalimanı’na hareket ediyoruz (180 km). Yerel havayollarıyla Saigon’a hareket ediyoruz. Akşam yemeği sonrası konaklama otelimizde.
+
+5. Gün 7 Aralık 2026 Pazartesi: Ho Chi Minh (Saigon)
+Otelde alacağımız kahvaltının ardından Saigon’un karmaşasını geride bırakıp hayatın su üzerinde geçtiği Mekong Deltası kasabası olan My Tho'ya hareket ediyoruz (70 km). Mekong Nehri’ndeki yaşamı göreceğimiz tekne turu sırasında Hindistan cevizinden ürünler üreten bir ailenin atölyesini ziyaret etmek için adadaki bir köye çıkıyoruz.
+
+6. Gün 8 Aralık 2026 Salı: Ho Chi Minh (Saigon) – Siem Reap (Kamboçya)
+Otelde alacağımız kahvaltının ardından efsanevi tünelleri ziyaret etmek için Cu Chi Bölgesi’nin yemyeşil kırsalına hareket ediyoruz (45 km). Cu Chi Tünelleri’ni ziyaretin ardından dönüş yolunda Bağımsızlık Sarayı’nı ve Savaş Müzesi’ni ziyaret ediyoruz. Yerel havayolu ile saat 19.30’da Siem Reap şehrine uçuyoruz.
+Önemli: Bugün uçak saatinden dolayı akşam yemeği yerine geç öğle yemeği alınacaktır.
+
+7. Gün 9 Aralık 2026 Çarşamba: Siem Reap – Angkor Thom – Ta Prohm – Angkor Wat – Siem Reap
+Otelde alacağımız kahvaltının ardından Angkor Thom, Bayon Tapınağı, Ta Prohm Tapınağı ve efsanevi Angkor Wat gezisi yapıyoruz. Akşam yemeği ve konaklama otelimizde.
+
+8. Gün 10 Aralık 2026 Perşembe: Siem Reap (Kamboçya) – Luang Prabang (Laos)
+Tonle Sap Gölü üzerinde geleneksel ahşap tekne turu yapıyoruz. Gezimizin ardından Siem Reap Havalimanı’ndan saat 17.05’te Laos’un Luang Prabang şehrine uçuyoruz.
+
+9. Gün 11 Aralık 2026 Cuma: Luang Prabang – Bangkok
+Sabah Pazarı ve Kraliyet Sarayı gezisi sonrası saat 16.05’te Tayland’ın başkenti Bangkok’a uçuyoruz (1sa 30dk).
+
+10. Gün 12 Aralık 2026 Cumartesi: Bangkok
+Erken saatte Maeklong Demiryolu Pazarı ve 150 yıllık Yüzen Çarşı turu yapıyoruz. Akşam yemeği ve konaklama otelimizde.
+
+11. Gün 13 Aralık 2026 Pazar: Bangkok – İstanbul
+Otelden çıkışımızın ardından Bangkok Havalimanı’na hareket ediyoruz. THY’nin TK0065 seferi ile 10.20’de İstanbul’a uçuyoruz. Varış: 16.45.
+
+Fiyata Dahil Olan Hizmetler
+• THY ile İstanbul – Hanoi / Bangkok – İstanbul gidiş-dönüş ekonomi sınıfı uçak bileti ve vergileri
+• Yerel Havayolları ile tüm ara uçuş biletleri ve vergileri
+• 9 gece 5* kalitesinde otellerde ve 1 gece cruise gemisinde konaklama
+• 8 kahvaltı, 8 akşam yemeği ve 1 geç öğle yemeği
+• Programda adı geçen tüm aktiviteler, transferler ve giriş ücretleri
+• Türkçe rehberlik hizmeti
+• Seyahat sigortası
+• Tüm yurt dışı yerel vergiler
+
+Fiyata Dahil Olmayan Hizmetler
+• Vietnam vizesi ve hizmet bedeli - E-VİZE (100$, yeşil pasaport sahipleri muaftır)
+• Kamboçya vizesi - KAPIDA VİZE (35$, yeşil pasaport sahipleri muaftır)
+• Laos vizesi - KAPIDA VİZE (45$, yeşil pasaport sahipleri de tabidir)
+• Öğle yemekleri
+• Yurt dışı çıkış harcı
+• Bahşişler ve otel ekstraları`;
+
+    setImportText(demo);
   };
 
   // ==========================================
@@ -821,6 +1119,19 @@ document.addEventListener('DOMContentLoaded', function () {
   return (
     <div className="min-h-screen bg-slate-100 p-4 md:p-8 font-sans antialiased text-slate-800">
       <div className="max-w-7xl mx-auto">
+        {/* BAŞARI BİLDİRİMİ (TOAST) */}
+        {importMessage && (
+          <div className="mb-4 bg-emerald-600 text-white px-5 py-3 rounded-2xl shadow-lg flex items-center justify-between animate-fade-in font-semibold text-sm">
+            <span>{importMessage}</span>
+            <button
+              onClick={() => setImportMessage(null)}
+              className="text-white/80 hover:text-white ml-4 font-bold"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* ÜST HEADER */}
         <header className="mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
           <div>
@@ -834,10 +1145,17 @@ document.addEventListener('DOMContentLoaded', function () {
               Hero Kartı, Buluşma, Tur Günleri, Çoklu Önemli Notlar, Dahil/Hariç Hizmetler ve Akordeon Notlar.
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center flex-wrap gap-2.5">
+            {/* AKILLI PDF / METİN AKTARMA BUTONU */}
+            <button
+              onClick={() => setIsImportModalOpen(true)}
+              className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow-md transition-all flex items-center gap-2 cursor-pointer active:scale-95"
+            >
+              <span>✨ PDF / Metin İle Otomatik Doldur</span>
+            </button>
             <button
               onClick={() => copyHTML(activeTab)}
-              className="bg-sky-600 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-md hover:bg-sky-700 transition-all flex items-center gap-2 cursor-pointer active:scale-95"
+              className="bg-sky-600 text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow-md hover:bg-sky-700 transition-all flex items-center gap-2 cursor-pointer active:scale-95"
             >
               <span>{copiedTab === activeTab ? "✓ Kopyalandı!" : "📋 Aktif Sekmeyi Kopyala"}</span>
             </button>
@@ -1490,6 +1808,109 @@ document.addEventListener('DOMContentLoaded', function () {
           </div>
         </div>
       </div>
+
+      {/* ========================================================================= */}
+      {/* AKILLI PDF / METİN OTOMATİK DOLDURMA MODALI */}
+      {/* ========================================================================= */}
+      {isImportModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full p-6 md:p-8 space-y-5 max-h-[90vh] overflow-y-auto border border-slate-200">
+            {/* MODAL BAŞLIĞI */}
+            <div className="flex justify-between items-start border-b border-slate-100 pb-4">
+              <div>
+                <h3 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
+                  <span>✨</span> PDF veya Metinden Otomatik Doldur
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Tur programı PDF dosyasını yükleyin veya metnini yapıştırın; başlık, günler, duraklar ve dahil/hariç hizmetler otomatik ayrılsın.
+                </p>
+              </div>
+              <button
+                onClick={() => setIsImportModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 text-2xl font-bold p-1 cursor-pointer transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* DOSYA YÜKLEME ALANI (SÜRÜKLE - BIRAK) */}
+            <div className="border-2 border-dashed border-indigo-200 hover:border-indigo-400 rounded-2xl p-5 text-center bg-indigo-50/50 transition-colors">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,.txt"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+              <div className="flex flex-col items-center gap-2">
+                <span className="text-3xl">📄</span>
+                <p className="text-sm font-bold text-indigo-900">
+                  {isPdfLoading ? "PDF Dosyası Okunuyor..." : "PDF Dosyasını Seçin veya Buraya Sürükleyin"}
+                </p>
+                <p className="text-xs text-slate-500">
+                  Desteklenen formatlar: .pdf, .txt (Word/PDF içerikleri)
+                </p>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isPdfLoading}
+                  className="mt-1 bg-white border border-indigo-200 hover:bg-indigo-50 text-indigo-700 text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-xs cursor-pointer"
+                >
+                  {isPdfLoading ? "⏳ Okunuyor..." : "Bilgisayardan Dosya Seç"}
+                </button>
+              </div>
+            </div>
+
+            {/* VEYA METİN ALANI */}
+            <div>
+              <div className="flex justify-between items-center mb-1.5">
+                <label className="text-xs font-bold text-slate-700">
+                  Veya PDF / Word Metnini Doğrudan Yapıştırın:
+                </label>
+                <button
+                  type="button"
+                  onClick={loadDemoVietnamTour}
+                  className="text-xs text-purple-600 hover:text-purple-800 font-bold underline cursor-pointer"
+                >
+                  💡 Örnek Vietnam Turunu Yükle (Test)
+                </button>
+              </div>
+              <textarea
+                value={importText}
+                onChange={(e) => setImportText(e.target.value)}
+                rows={9}
+                placeholder="Örnek:
+VİETNAM TURU
+Hanoi, Ha Long Bay...
+1. Gün 3 Aralık: İstanbul – Hanoi
+İstanbul Havalimanı'nda buluşup hareket ediyoruz...
+Fiyata Dahil Olan Hizmetler
+• THY ile uçak bileti..."
+                className="w-full border border-slate-200 rounded-xl p-3 text-xs outline-none focus:border-indigo-500 font-mono bg-slate-50"
+              />
+            </div>
+
+            {/* MODAL BUTONLARI */}
+            <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setIsImportModalOpen(false)}
+                className="text-slate-600 hover:bg-slate-100 text-sm font-bold px-4 py-2.5 rounded-xl transition-colors cursor-pointer"
+              >
+                İptal
+              </button>
+              <button
+                type="button"
+                onClick={() => parseAndApplyTourText(importText)}
+                disabled={!importText.trim()}
+                className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 disabled:opacity-50 text-white text-sm font-bold px-6 py-2.5 rounded-xl transition-all shadow-md flex items-center gap-2 cursor-pointer active:scale-95"
+              >
+                <span>🚀 Sihirli Şekilde Forma Aktar</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
