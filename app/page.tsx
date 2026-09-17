@@ -454,6 +454,38 @@ export default function TurOlusturucu() {
   // =========================================================================
   // AKILLI PDF / METİN PARSER (AYRIŞTIRICI) MOTORU
   // =========================================================================
+
+  // METİN İÇERİSİNDE SEÇİLİ YAZIYI KALIN (BOLD) YAPMA / KALDIRMA
+  const toggleBoldSelection = (textareaId: string, dayId: number, currentVal: string) => {
+    const el = document.getElementById(textareaId) as HTMLTextAreaElement | null;
+    if (!el) return;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    if (start !== end) {
+      const selected = currentVal.substring(start, end);
+      let rep = '';
+      if (selected.startsWith('<b>') && selected.endsWith('</b>')) {
+        rep = selected.substring(3, selected.length - 4);
+      } else {
+        rep = `<b>${selected}</b>`;
+      }
+      const updated = currentVal.substring(0, start) + rep + currentVal.substring(end);
+      updateDay(dayId, 'content', updated);
+      setTimeout(() => {
+        el.focus();
+        el.setSelectionRange(start, start + rep.length);
+      }, 50);
+    } else {
+      const rep = '<b>kalın yazı</b>';
+      const updated = currentVal.substring(0, start) + rep + currentVal.substring(end);
+      updateDay(dayId, 'content', updated);
+      setTimeout(() => {
+        el.focus();
+        el.setSelectionRange(start + 3, start + 3 + 10);
+      }, 50);
+    }
+  };
+
   const parseAndApplyTourText = (rawText: string) => {
     if (!rawText || !rawText.trim()) {
       alert("Lütfen önce bir PDF yükleyin veya metin yapıştırın!");
@@ -489,7 +521,7 @@ export default function TurOlusturucu() {
           .filter((l) => l.length > 5 && !/Dahil\s+Olmayan\s+Hizmetler|Hariç\s+Hizmetler/i.test(l));
       }
 
-      // 2. BAŞLIK VE ALT BAŞLIK TAHMİNİ
+      // 2. BAŞLIK VE ALT BAŞLIK TAHMİNİ (ÇOK SATIRLI BAŞLIKLARI KUSURSUZ BİRLEŞTİRME)
       const lines = daysSection
         .split("\n")
         .map((l) => l.trim())
@@ -498,20 +530,67 @@ export default function TurOlusturucu() {
       let detectedTitle = hero.title;
       let detectedSubtitle = hero.subtitle;
 
-      // "1. Gün" den önceki satırlardan başlık ve şehirleri yakala
+      // "1. Gün" veya "Buluşma" satırını bul
       const firstDayIdx = lines.findIndex((l) => /(?:1\.\s*G[üu]n|Bulu[şs]ma)/i.test(l));
       if (firstDayIdx > 0) {
+        // 1. Gün'e kadar olan satırları al
         const preLines = lines.slice(0, firstDayIdx);
-        if (preLines.length === 1) {
-          detectedTitle = preLines[0];
-        } else if (preLines.length >= 2) {
-          detectedTitle = preLines[0];
-          detectedSubtitle = preLines.slice(1).join(", ");
+
+        // "TURU", "TUR", "GEZİSİ" içeren son başlık satırını bul
+        let turuLineIdx = -1;
+        for (let i = 0; i < preLines.length; i++) {
+          if (/\b(?:TURU|TUR|GEZİSİ|PROGRAMI)\b/i.test(preLines[i])) {
+            turuLineIdx = i;
+            break;
+          }
+        }
+
+        let titleParts: string[] = [];
+        let subtitleParts: string[] = [];
+
+        if (turuLineIdx !== -1) {
+          // "TURU" satırına kadar olan tüm satırları (örn: "VİETNAM, KAMBOÇYA, LAOS," + "TAYLAND TURU") başlık yap
+          titleParts = preLines.slice(0, turuLineIdx + 1);
+          subtitleParts = preLines.slice(turuLineIdx + 1);
+        } else {
+          // Eğer "TURU" kelimesi yoksa büyük harf kontrolü
+          const isUpper = (s: string) => s.replace(/[^a-zA-ZçğıöşüÇĞİÖŞÜ]/g, "").length > 3 && s === s.toUpperCase();
+          let lastUpper = -1;
+          for (let i = 0; i < preLines.length; i++) {
+            if (isUpper(preLines[i])) lastUpper = i;
+            else break;
+          }
+          if (lastUpper !== -1) {
+            titleParts = preLines.slice(0, lastUpper + 1);
+            subtitleParts = preLines.slice(lastUpper + 1);
+          } else if (preLines.length > 1) {
+            titleParts = [preLines[0]];
+            subtitleParts = preLines.slice(1);
+          } else {
+            titleParts = preLines;
+          }
+        }
+
+        if (titleParts.length > 0) {
+          detectedTitle = titleParts
+            .join(" ")
+            .replace(/<[^>]+>/g, "")
+            .replace(/\s{2,}/g, " ")
+            .trim();
+        }
+
+        if (subtitleParts.length > 0) {
+          detectedSubtitle = subtitleParts
+            .join(", ")
+            .replace(/<[^>]+>/g, "")
+            .replace(/\s{2,}/g, " ")
+            .replace(/,\s*,/g, ",")
+            .trim();
         }
       }
 
-      // 3. GÜNLERİ AYRIŞTIR
-      const dayRegex = /(?:^|\n)\s*(?:(\d+)\.\s*G[üu]n|Bulu[şs]ma)(?:\s+[^\n:]+)?[:\-–—]\s*([^\n]+)/gi;
+      // 3. GÜNLERİ AYRIŞTIR (Bold taglerini ve farklı formatları kusursuz yakalama)
+      const dayRegex = /(?:^|\n)(?:<b[^>]*>)?\s*(?:(\d+)\.\s*G[üu]n|Bulu[şs]ma)(?:[^\n:]*?)?[:\-–—]\s*([^\n]+)/gi;
       const matches: { full: string; dayNum?: string; routeStr: string; index: number; length: number }[] = [];
       let match;
 
@@ -519,7 +598,7 @@ export default function TurOlusturucu() {
         matches.push({
           full: match[0],
           dayNum: match[1],
-          routeStr: match[2].trim(),
+          routeStr: match[2].replace(/<[^>]+>/g, '').trim(),
           index: match.index,
           length: match[0].length,
         });
@@ -539,26 +618,26 @@ export default function TurOlusturucu() {
           .join("\n")
           .trim();
 
-        // Önemli Notları Ayıkla
+        // Önemli Notları Ayıkla (Bold taglerini koruyarak veya temizleyerek)
         const notes: string[] = [];
         dayRaw = dayRaw
-          .replace(/(?:^|\n)\s*(?:Önemli|Not|Dikkat)\s*:\s*([^\n]+)/gi, (_, noteText) => {
-            notes.push(noteText.trim());
+          .replace(/(?:^|\n)\s*(?:<b>|<strong[^>]*>)?(?:Önemli|Not|Dikkat)\s*:\s*(?:<\/b>|<\/strong>)?\s*([^\n]+)/gi, (_, noteText) => {
+            notes.push(noteText.replace(/<[^>]+>/g, "").trim());
             return "";
           })
           .trim();
 
-        // Rota ve durakları belirle
-        // "İstanbul – Hanoi", "Hanoi – Ha Long Bay - Cruise"
-        let stops = m.routeStr
+        // Rota duraklarını belirle (HTML taglerini rotadan temizle)
+        const cleanRouteStr = m.routeStr.replace(/<[^>]+>/g, "").trim();
+        let stops = cleanRouteStr
           .split(/\s*[\u2013\u2014\-–—>]+\s*/)
           .map((s) => s.trim())
           .filter(Boolean);
 
-        if (stops.length === 0) stops = [m.routeStr];
+        if (stops.length === 0) stops = [cleanRouteStr];
 
         // İkon tahmin motoru
-        const lowerContent = (m.routeStr + " " + dayRaw).toLowerCase();
+        const lowerContent = (cleanRouteStr + " " + dayRaw).toLowerCase();
         const routes: RouteNode[] = stops.map((stop, sIdx) => {
           let icon = "bus.png";
           if (sIdx < stops.length - 1) {
@@ -584,7 +663,7 @@ export default function TurOlusturucu() {
           type: m.dayNum ? "day" : "meeting",
           dayTitle: m.dayNum ? `${m.dayNum}. Gün` : "Buluşma",
           routes: routes,
-          content: dayRaw,
+          content: dayRaw, // Bold <b>...</b> tagleri içeride korunmuş olarak kalır!
           imageUrl: "",
           notes: notes,
         });
@@ -611,14 +690,14 @@ export default function TurOlusturucu() {
 
       setIsImportModalOpen(false);
       setActiveTab("program");
-      setImportMessage(`✓ Harika! ${parsedDays.length} Gün, Dahil ve Hariç hizmetler başarıyla yüklendi.`);
+      setImportMessage(`✓ Harika! "${detectedTitle}" başlıklı ${parsedDays.length} Günlük Tur, kalın (bold) metinleriyle başarıyla aktarıldı.`);
       setTimeout(() => setImportMessage(null), 5000);
     } catch (err: any) {
       alert("Ayrıştırma sırasında bir hata oluştu: " + err.message);
     }
   };
 
-  // PDF DOSYASINI OKUMA FONKSİYONU
+  // PDF DOSYASINI OKUMA FONKSİYONU (BOLD YAZILARI <b> İLE YAKALAR!)
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -626,7 +705,7 @@ export default function TurOlusturucu() {
     if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
       setIsPdfLoading(true);
       try {
-        // PDF.js'i CDN üzerinden dinamik yükle (bundle boyutu şişmez)
+        // PDF.js'i CDN üzerinden dinamik yükle
         // @ts-ignore
         if (!window.pdfjsLib) {
           await new Promise((resolve, reject) => {
@@ -648,19 +727,60 @@ export default function TurOlusturucu() {
 
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
+          // Font objelerini yüklemek için getOperatorList çağırılır
+          await page.getOperatorList();
           const textContent = await page.getTextContent();
           let lastY: number | null = null;
           let pageText = "";
+          let isCurrentlyBold = false;
+
           for (const item of textContent.items) {
-            if ("str" in item) {
-              if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) {
-                pageText += "\n";
-              } else if (pageText && !pageText.endsWith(" ") && !item.str.startsWith(" ")) {
-                pageText += " ";
+            if ("str" in item && item.str) {
+              let isItemBold = false;
+              if (page.commonObjs.has(item.fontName)) {
+                const fontObj = page.commonObjs.get(item.fontName);
+                if (fontObj) {
+                  isItemBold = Boolean(
+                    fontObj.bold ||
+                    fontObj.black ||
+                    (fontObj.name && /bold|black|heavy|w[7-9]/i.test(fontObj.name)) ||
+                    (fontObj.loadedName && /bold|black|heavy|w[7-9]/i.test(fontObj.loadedName))
+                  );
+                }
               }
-              pageText += item.str;
+
+              const styleObj = textContent.styles[item.fontName];
+              if (styleObj && styleObj.fontFamily && /bold|black/i.test(styleObj.fontFamily)) {
+                isItemBold = true;
+              }
+
+              // Satır geçişi kontrolü
+              if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) {
+                if (isCurrentlyBold) {
+                  pageText += "</b>";
+                  isCurrentlyBold = false;
+                }
+                pageText += "\n";
+              }
+
+              const str = item.str;
+              const isWhitespaceOnly = /^\s+$/.test(str);
+
+              // Boşluk olmayan karakterlerde bold durumunu güncelle
+              if (isItemBold && !isCurrentlyBold && !isWhitespaceOnly) {
+                pageText += "<b>";
+                isCurrentlyBold = true;
+              } else if (!isItemBold && isCurrentlyBold && !isWhitespaceOnly) {
+                pageText += "</b>";
+                isCurrentlyBold = false;
+              }
+
+              pageText += str;
               lastY = item.transform[5];
             }
+          }
+          if (isCurrentlyBold) {
+            pageText += "</b>";
           }
           extracted += pageText + "\n\n";
         }
@@ -681,45 +801,63 @@ export default function TurOlusturucu() {
     }
   };
 
-  // DEMO METNİ YÜKLEME (VIETNAM TURU)
+  // KOPYALA-YAPIŞTIRDA BOLD BİLGİSİNİ KORUMA HANDLER'I
+  const handleTextareaPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const html = e.clipboardData.getData("text/html");
+    if (html && (html.includes("<b") || html.includes("<strong") || html.includes("font-weight"))) {
+      e.preventDefault();
+      let str = html.replace(/<(?:strong|b)(?:\s+[^>]*)?>([\s\S]*?)<\/(?:strong|b)>/gi, "___B_START___$1___B_END___");
+      str = str.replace(/<span[^>]*style="[^"]*font-weight:\s*(?:bold|[6-9]00)[^"]*"[^>]*>([\s\S]*?)<\/span>/gi, "___B_START___$1___B_END___");
+      str = str.replace(/<br\s*\/?>/gi, "\n");
+      str = str.replace(/<\/(?:p|div|li|h[1-6]|tr)>/gi, "\n");
+      str = str.replace(/<[^>]+>/g, "");
+      str = str.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"");
+      str = str.replace(/___B_START___/g, "<b>").replace(/___B_END___/g, "</b>");
+      const clean = str.replace(/\n{3,}/g, "\n\n").trim();
+      setImportText(clean);
+    }
+  };
+
+  // DEMO METNİ YÜKLEME (VİETNAM TURU - TAM BAŞLIK VE BOLD ETİKETLERLE)
   const loadDemoVietnamTour = () => {
     const demo = `BURAK TUR
-VİETNAM, KAMBOÇYA, LAOS, TAYLAND TURU
+VİETNAM, KAMBOÇYA, LAOS, 
+TAYLAND TURU
 Hanoi, Ha Long Bay, Ho Chi Minh (Saigon), Siem Reap, Luang Prabang, Bangkok
 
 1. Gün 3 Aralık 2026 Perşembe: İstanbul – Hanoi
-İstanbul Yeni Havalimanı Dış Hatlar Terminali Giden Yolcu Salonu "THY" bankosunda 00.01’de buluşuyoruz. Check-in, pasaport ve gümrük işlemleri sonrası THY'nin TK0252 seferi ile 18.05’te Vietnam'ın Hanoi şehrine uçuyoruz (9sa 30dk).
+İstanbul Yeni Havalimanı Dış Hatlar Terminali Giden Yolcu Salonu <b>"THY"</b> bankosunda <b>00.01’de</b> buluşuyoruz. Check-in, pasaport ve gümrük işlemleri sonrası THY'nin <b>TK0252</b> seferi ile <b>18.05’te</b> Vietnam'ın <b>Hanoi</b> şehrine uçuyoruz (9sa 30dk).
 
 2. Gün 4 Aralık 2026 Cuma: Hanoi
-Varış: 07.05. Varışı müteakip yapılacak şehir turumuzda Ho Chi Minh Mozolesi, Başkanlık Sarayı, Edebiyat Tapınağı, eskiden bir hapishane olan Hoa Lo, Eski Mahalle, Hanoi Tren Sokağı, Kral Ly Thai To Heykeli, Ngoc Son Tapınağı ve Hoan Kiem Gölü göreceğimiz yerler arasındadır. Serbest zamanın ardından akşam yemeği sonrası konaklama otelimizde.
+Varış: <b>07.05</b>. Varışı müteakip yapılacak şehir turumuzda <b>Ho Chi Minh Mozolesi</b>, <b>Başkanlık Sarayı</b>, <b>Edebiyat Tapınağı</b>, eskiden bir hapishane olan <b>Hoa Lo</b>, <b>Eski Mahalle</b>, <b>Hanoi Tren Sokağı</b>, <b>Kral Ly Thai To Heykeli</b>, <b>Ngoc Son Tapınağı</b> ve <b>Hoan Kiem Gölü</b> göreceğimiz yerler arasındadır. Serbest zamanın ardından akşam yemeği sonrası konaklama otelimizde.
 
 3. Gün 5 Aralık 2026 Cumartesi: Hanoi – Ha Long Bay - Cruise
-Otelde alacağımız kahvaltının ardından UNESCO Dünya Mirası Listesi'nde yer alan ve dünyanın en etkileyici doğal oluşumlarından biri kabul edilen Ha Long Bay'e hareket ediyoruz (155 km). Varışımızın ardından cruise gemimize geçerek unutulmaz körfez yolculuğumuza başlıyoruz. Gemide alacağımız öğle yemeği eşliğinde binlerce kireçtaşı adacığı arasında eşsiz manzaraların tadını çıkarıyoruz. Programımız kapsamında mağara ziyaretleri, bambu teknesi veya kano aktiviteleri ve körfezin saklı koylarını keşfetme imkânı buluyoruz. Akşam yemeği sonrası konaklama cruise gemimizde.
+Otelde alacağımız kahvaltının ardından UNESCO Dünya Mirası Listesi'nde yer alan ve dünyanın en etkileyici doğal oluşumlarından biri kabul edilen <b>Ha Long Bay'e</b> hareket ediyoruz (155 km). Varışımızın ardından cruise gemimize geçerek unutulmaz körfez yolculuğumuza başlıyoruz. Gemide alacağımız öğle yemeği eşliğinde binlerce kireçtaşı adacığı arasında eşsiz manzaraların tadını çıkarıyoruz. Programımız kapsamında mağara ziyaretleri, bambu teknesi veya kano aktiviteleri ve körfezin saklı koylarını keşfetme imkânı buluyoruz. Akşam yemeği sonrası konaklama cruise gemimizde.
 
 4. Gün 6 Aralık 2026 Pazar: Ha Long Bay - Hanoi – Ho Chi Minh (Saigon)
-Cruise gemisinde alacağımız kahvaltının ardından Hanoi Havalimanı’na hareket ediyoruz (180 km). Yerel havayollarıyla Saigon’a hareket ediyoruz. Akşam yemeği sonrası konaklama otelimizde.
+Cruise gemisinde alacağımız kahvaltının ardından <b>Hanoi Havalimanı’na</b> hareket ediyoruz (180 km). Yerel havayollarıyla <b>Saigon’a</b> hareket ediyoruz. Akşam yemeği sonrası konaklama otelimizde.
 
 5. Gün 7 Aralık 2026 Pazartesi: Ho Chi Minh (Saigon)
-Otelde alacağımız kahvaltının ardından Saigon’un karmaşasını geride bırakıp hayatın su üzerinde geçtiği Mekong Deltası kasabası olan My Tho'ya hareket ediyoruz (70 km). Mekong Nehri’ndeki yaşamı göreceğimiz tekne turu sırasında Hindistan cevizinden ürünler üreten bir ailenin atölyesini ziyaret etmek için adadaki bir köye çıkıyoruz.
+Otelde alacağımız kahvaltının ardından <b>Saigon’un</b> karmaşasını geride bırakıp hayatın su üzerinde geçtiği <b>Mekong Deltası</b> kasabası olan <b>My Tho'ya</b> hareket ediyoruz (70 km). Mekong Nehri’ndeki yaşamı göreceğimiz tekne turu sırasında Hindistan cevizinden ürünler üreten bir ailenin atölyesini ziyaret etmek için adadaki bir köye çıkıyoruz.
 
 6. Gün 8 Aralık 2026 Salı: Ho Chi Minh (Saigon) – Siem Reap (Kamboçya)
-Otelde alacağımız kahvaltının ardından efsanevi tünelleri ziyaret etmek için Cu Chi Bölgesi’nin yemyeşil kırsalına hareket ediyoruz (45 km). Cu Chi Tünelleri’ni ziyaretin ardından dönüş yolunda Bağımsızlık Sarayı’nı ve Savaş Müzesi’ni ziyaret ediyoruz. Yerel havayolu ile saat 19.30’da Siem Reap şehrine uçuyoruz.
+Otelde alacağımız kahvaltının ardından efsanevi tünelleri ziyaret etmek için <b>Cu Chi Bölgesi’nin</b> yemyeşil kırsalına hareket ediyoruz (45 km). Cu Chi Tünelleri’ni ziyaretin ardından dönüş yolunda <b>Bağımsızlık Sarayı’nı</b> ve <b>Savaş Müzesi’ni</b> ziyaret ediyoruz. Yerel havayolu ile saat <b>19.30’da</b> <b>Siem Reap</b> şehrine uçuyoruz.
 Önemli: Bugün uçak saatinden dolayı akşam yemeği yerine geç öğle yemeği alınacaktır.
 
 7. Gün 9 Aralık 2026 Çarşamba: Siem Reap – Angkor Thom – Ta Prohm – Angkor Wat – Siem Reap
-Otelde alacağımız kahvaltının ardından Angkor Thom, Bayon Tapınağı, Ta Prohm Tapınağı ve efsanevi Angkor Wat gezisi yapıyoruz. Akşam yemeği ve konaklama otelimizde.
+Otelde alacağımız kahvaltının ardından <b>Angkor Thom</b>, <b>Bayon Tapınağı</b>, <b>Ta Prohm Tapınağı</b> ve efsanevi <b>Angkor Wat</b> gezisi yapıyoruz. Akşam yemeği ve konaklama otelimizde.
 
 8. Gün 10 Aralık 2026 Perşembe: Siem Reap (Kamboçya) – Luang Prabang (Laos)
-Tonle Sap Gölü üzerinde geleneksel ahşap tekne turu yapıyoruz. Gezimizin ardından Siem Reap Havalimanı’ndan saat 17.05’te Laos’un Luang Prabang şehrine uçuyoruz.
+<b>Tonle Sap Gölü</b> üzerinde geleneksel ahşap tekne turu yapıyoruz. Gezimizin ardından Siem Reap Havalimanı’ndan saat 17.05’te Laos’un <b>Luang Prabang</b> şehrine uçuyoruz.
 
 9. Gün 11 Aralık 2026 Cuma: Luang Prabang – Bangkok
-Sabah Pazarı ve Kraliyet Sarayı gezisi sonrası saat 16.05’te Tayland’ın başkenti Bangkok’a uçuyoruz (1sa 30dk).
+<b>Sabah Pazarı</b> ve <b>Kraliyet Sarayı</b> gezisi sonrası saat 16.05’te Tayland’ın başkenti <b>Bangkok’a</b> uçuyoruz (1sa 30dk).
 
 10. Gün 12 Aralık 2026 Cumartesi: Bangkok
-Erken saatte Maeklong Demiryolu Pazarı ve 150 yıllık Yüzen Çarşı turu yapıyoruz. Akşam yemeği ve konaklama otelimizde.
+Erken saatte <b>Maeklong Demiryolu Pazarı</b> ve 150 yıllık <b>Yüzen Çarşı</b> turu yapıyoruz. Akşam yemeği ve konaklama otelimizde.
 
 11. Gün 13 Aralık 2026 Pazar: Bangkok – İstanbul
-Otelden çıkışımızın ardından Bangkok Havalimanı’na hareket ediyoruz. THY’nin TK0065 seferi ile 10.20’de İstanbul’a uçuyoruz. Varış: 16.45.
+Otelden çıkışımızın ardından <b>Bangkok Havalimanı’na</b> hareket ediyoruz. THY’nin <b>TK0065</b> seferi ile 10.20’de İstanbul’a uçuyoruz. Varış: 16.45.
 
 Fiyata Dahil Olan Hizmetler
 • THY ile İstanbul – Hanoi / Bangkok – İstanbul gidiş-dönüş ekonomi sınıfı uçak bileti ve vergileri
@@ -1125,7 +1263,7 @@ document.addEventListener('DOMContentLoaded', function () {
             <span>{importMessage}</span>
             <button
               onClick={() => setImportMessage(null)}
-              className="text-white/80 hover:text-white ml-4 font-bold"
+              className="text-white/80 hover:text-white ml-4 font-bold cursor-pointer"
             >
               ✕
             </button>
@@ -1501,15 +1639,35 @@ document.addEventListener('DOMContentLoaded', function () {
 
                       {/* AÇIKLAMA METNİ */}
                       <div>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">
-                          Açıklama Metni (Kalın yapmak için &lt;strong&gt;metin&lt;/strong&gt;)
-                        </label>
+                        <div className="flex justify-between items-center mb-1">
+                          <label className="block text-xs font-semibold text-slate-600">
+                            Açıklama Metni (Kalın yerler &lt;b&gt;...&lt;/b&gt; olarak saklanır)
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => toggleBoldSelection(`day-content-${day.id}`, day.id, day.content)}
+                            title="Seçili metni kalın yapar veya kaldırır (Kısayol: Ctrl+B / Cmd+B)"
+                            className="inline-flex items-center gap-1 text-[11px] font-bold bg-slate-100 hover:bg-sky-50 hover:text-sky-600 text-slate-700 px-2 py-0.5 rounded border border-slate-200 transition shadow-sm"
+                          >
+                            <span className="font-extrabold text-xs">B</span> Seçiliyi Kalın Yap
+                          </button>
+                        </div>
                         <textarea
+                          id={`day-content-${day.id}`}
                           value={day.content}
                           onChange={(e) => updateDay(day.id, "content", e.target.value)}
+                          onKeyDown={(e) => {
+                            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
+                              e.preventDefault();
+                              toggleBoldSelection(`day-content-${day.id}`, day.id, day.content);
+                            }
+                          }}
                           rows={4}
-                          className="w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none focus:border-sky-500 resize-none"
+                          className="w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none focus:border-sky-500 resize-none font-sans"
                         />
+                        <span className="block text-[11px] text-slate-400 mt-0.5">
+                          💡 İpucu: Kalın yapmak istediğiniz kelimeyi seçip <b>B</b> butonuna basabilir veya klavyeden <b>Ctrl+B / Cmd+B</b> yapabilirsiniz.
+                        </span>
                       </div>
 
                       {/* GÖRSEL URL */}
@@ -1822,7 +1980,7 @@ document.addEventListener('DOMContentLoaded', function () {
                   <span>✨</span> PDF veya Metinden Otomatik Doldur
                 </h3>
                 <p className="text-xs text-slate-500 mt-1">
-                  Tur programı PDF dosyasını yükleyin veya metnini yapıştırın; başlık, günler, duraklar ve dahil/hariç hizmetler otomatik ayrılsın.
+                  Tur programı PDF dosyasını yükleyin veya metnini yapıştırın; başlık, günler, duraklar, kalın yazılar ve dahil/hariç hizmetler otomatik ayrılsın.
                 </p>
               </div>
               <button
@@ -1845,10 +2003,10 @@ document.addEventListener('DOMContentLoaded', function () {
               <div className="flex flex-col items-center gap-2">
                 <span className="text-3xl">📄</span>
                 <p className="text-sm font-bold text-indigo-900">
-                  {isPdfLoading ? "PDF Dosyası Okunuyor..." : "PDF Dosyasını Seçin veya Buraya Sürükleyin"}
+                  {isPdfLoading ? "PDF Dosyası Okunuyor & Kalın Yazılar Çözümleniyor..." : "PDF Dosyasını Seçin veya Buraya Sürükleyin"}
                 </p>
                 <p className="text-xs text-slate-500">
-                  Desteklenen formatlar: .pdf, .txt (Word/PDF içerikleri)
+                  Desteklenen formatlar: .pdf, .txt (PDF'teki tüm kalın/bold yazılar korunur)
                 </p>
                 <button
                   type="button"
@@ -1878,16 +2036,23 @@ document.addEventListener('DOMContentLoaded', function () {
               <textarea
                 value={importText}
                 onChange={(e) => setImportText(e.target.value)}
+                onPaste={handleTextareaPaste}
                 rows={9}
                 placeholder="Örnek:
-VİETNAM TURU
-Hanoi, Ha Long Bay...
+VİETNAM, KAMBOÇYA, LAOS, 
+TAYLAND TURU
+Hanoi, Ha Long Bay, Ho Chi Minh...
+
 1. Gün 3 Aralık: İstanbul – Hanoi
-İstanbul Havalimanı'nda buluşup hareket ediyoruz...
+İstanbul Havalimanı THY bankosunda buluşuyoruz...
+
 Fiyata Dahil Olan Hizmetler
 • THY ile uçak bileti..."
                 className="w-full border border-slate-200 rounded-xl p-3 text-xs outline-none focus:border-indigo-500 font-mono bg-slate-50"
               />
+              <p className="text-[11px] text-slate-400 mt-1">
+                İpucu: Word veya PDF'ten kopyalayıp buraya yapıştırdığınızda kalın (bold) kelimeler otomatik korunur.
+              </p>
             </div>
 
             {/* MODAL BUTONLARI */}
