@@ -252,9 +252,11 @@ export default function TurOlusturucu() {
   ]);
 
   // DAHİL OLANLAR
+  const [includedTitle, setIncludedTitle] = useState<string>("Fiyata Dahil Olan Hizmetler");
   const [includedServices, setIncludedServices] = useState<string[]>(DEFAULT_INCLUDED);
 
   // HARİÇ OLANLAR
+  const [excludedTitle, setExcludedTitle] = useState<string>("Fiyata Dahil Olmayan Hizmetler");
   const [excludedServices, setExcludedServices] = useState<string[]>(DEFAULT_EXCLUDED);
 
   // ÖNEMLİ BİLGİLER
@@ -500,11 +502,11 @@ export default function TurOlusturucu() {
       let incItems: string[] = [];
       let excItems: string[] = [];
 
-      const incMatch = cleanText.search(/(?:Fiyata\s+)?Dahil\s+Olan\s+Hizmetler/i);
-      const excMatch = cleanText.search(/(?:Fiyata\s+)?Dahil\s+Olmayan\s+Hizmetler|Hariç\s+Hizmetler/i);
+      const incMatch = cleanText.search(/(?:<b[^>]*>)?\s*(?:Fiyata\s+)?Dahil\s+Olan\s+Hizmetler/i);
+      const excMatch = cleanText.search(/(?:<b[^>]*>)?\s*(?:Fiyata\s+)?Dahil\s+Olmayan\s+Hizmetler|Hariç\s+Hizmetler/i);
 
       if (incMatch !== -1) {
-        daysSection = cleanText.substring(0, incMatch);
+        daysSection = cleanText.substring(0, incMatch).replace(/<b[^>]*>\s*$/gi, "").trim();
         const incEnd = excMatch !== -1 && excMatch > incMatch ? excMatch : cleanText.length;
         const incText = cleanText.substring(incMatch, incEnd);
         incItems = incText
@@ -618,6 +620,14 @@ export default function TurOlusturucu() {
           .join("\n")
           .trim();
 
+        // Sonda kalan açık <b> taglerini temizle ve etiket dengesini sağla
+        dayRaw = dayRaw.replace(/<b[^>]*>\s*$/gi, "").trim();
+        const openBCount = (dayRaw.match(/<b[^>]*>/gi) || []).length;
+        const closeBCount = (dayRaw.match(/<\/b>/gi) || []).length;
+        if (openBCount > closeBCount) {
+          dayRaw += "</b>".repeat(openBCount - closeBCount);
+        }
+
         // Önemli Notları Ayıkla (Bold taglerini koruyarak veya temizleyerek)
         const notes: string[] = [];
         dayRaw = dayRaw
@@ -685,8 +695,24 @@ export default function TurOlusturucu() {
         duration: `${parsedDays.length} Günlük Program`,
       });
       setDays(parsedDays);
-      if (incItems.length > 0) setIncludedServices(incItems);
-      if (excItems.length > 0) setExcludedServices(excItems);
+      if (incItems.length > 0) {
+        setIncludedServices(incItems.map(item => {
+          let clean = item.replace(/<b[^>]*>\s*$/gi, "").trim();
+          const o = (clean.match(/<b[^>]*>/gi) || []).length;
+          const c = (clean.match(/<\/b>/gi) || []).length;
+          if (o > c) clean += "</b>".repeat(o - c);
+          return clean;
+        }));
+      }
+      if (excItems.length > 0) {
+        setExcludedServices(excItems.map(item => {
+          let clean = item.replace(/<b[^>]*>\s*$/gi, "").trim();
+          const o = (clean.match(/<b[^>]*>/gi) || []).length;
+          const c = (clean.match(/<\/b>/gi) || []).length;
+          if (o > c) clean += "</b>".repeat(o - c);
+          return clean;
+        }));
+      }
 
       setIsImportModalOpen(false);
       setActiveTab("program");
@@ -1093,11 +1119,15 @@ Fiyata Dahil Olmayan Hizmetler
         (item, idx) =>
           `\t<li style="background: #ffffff !important; margin-bottom: ${
             idx === includedServices.length - 1 ? "0" : "8px"
-          } !important; padding: 10px 18px 10px 44px !important; border-radius: 12px !important; border: 1px solid #f1f5f9 !important; font-size: 15px !important; line-height: 1.4 !important; color: #0f172a !important; box-shadow: 0 2px 4px rgba(15, 23, 42, 0.02) !important; position: relative !important; text-align: left !important;"><span style="position: absolute !important; left: 16px !important; top: 10px !important; color: #22c55e !important; font-weight: 800 !important; font-size: 16px !important; line-height: 1 !important;">✓</span> ${item}</li>`
+          } !important; padding: 10px 18px 10px 44px !important; border-radius: 12px !important; border: 1px solid #f1f5f9 !important; font-size: 15px !important; line-height: 1.4 !important; color: #0f172a !important; font-weight: 400 !important; box-shadow: 0 2px 4px rgba(15, 23, 42, 0.02) !important; position: relative !important; text-align: left !important;"><span style="position: absolute !important; left: 16px !important; top: 10px !important; color: #22c55e !important; font-weight: 800 !important; font-size: 16px !important; line-height: 1 !important;">✓</span> ${item}</li>`
       )
       .join("\n");
 
-    return `<ul style="list-style: none !important; padding: 0 !important; margin: 0 auto !important; max-width: 800px !important; font-family: 'Outfit', sans-serif !important;">
+    const titleHTML = includedTitle && includedTitle.trim()
+      ? `<h2 style="font-size: 20px; font-weight: 800; color: #0f172a; margin-bottom: 16px; text-align: left; font-family: 'Outfit', sans-serif !important;">${includedTitle.trim()}</h2>\n`
+      : "";
+
+    return `${titleHTML}<ul style="list-style: none !important; padding: 0 !important; margin: 0 auto !important; max-width: 800px !important; font-family: 'Outfit', sans-serif !important;">
 ${itemsHTML}
 </ul>\n<p>&nbsp;</p>`;
   };
@@ -1109,11 +1139,15 @@ ${itemsHTML}
         (item, idx) =>
           `\t<li style="background: #ffffff !important; margin-bottom: ${
             idx === excludedServices.length - 1 ? "0" : "8px"
-          } !important; padding: 10px 18px 10px 44px !important; border-radius: 12px !important; border: 1px solid #fee2e2 !important; font-size: 15px !important; line-height: 1.4 !important; color: #0f172a !important; box-shadow: 0 2px 4px rgba(239, 68, 68, 0.03) !important; position: relative !important; text-align: left !important;"><span style="position: absolute !important; left: 16px !important; top: 10px !important; color: #ef4444 !important; font-weight: 800 !important; font-size: 15px !important; line-height: 1 !important;">✕</span> ${item}</li>`
+          } !important; padding: 10px 18px 10px 44px !important; border-radius: 12px !important; border: 1px solid #fee2e2 !important; font-size: 15px !important; line-height: 1.4 !important; color: #0f172a !important; font-weight: 400 !important; box-shadow: 0 2px 4px rgba(239, 68, 68, 0.03) !important; position: relative !important; text-align: left !important;"><span style="position: absolute !important; left: 16px !important; top: 10px !important; color: #ef4444 !important; font-weight: 800 !important; font-size: 15px !important; line-height: 1 !important;">✕</span> ${item}</li>`
       )
       .join("\n");
 
-    return `<ul style="list-style: none !important; padding: 0 !important; margin: 0 auto !important; max-width: 800px !important; font-family: 'Outfit', sans-serif !important;">
+    const titleHTML = excludedTitle && excludedTitle.trim()
+      ? `<h2 style="font-size: 20px; font-weight: 800; color: #0f172a; margin-bottom: 16px; text-align: left; font-family: 'Outfit', sans-serif !important;">${excludedTitle.trim()}</h2>\n`
+      : "";
+
+    return `${titleHTML}<ul style="list-style: none !important; padding: 0 !important; margin: 0 auto !important; max-width: 800px !important; font-family: 'Outfit', sans-serif !important;">
 ${itemsHTML}
 </ul>\n<p>&nbsp;</p>`;
   };
@@ -1146,7 +1180,7 @@ ${itemsHTML}
 .bt-tour-details[open] .bt-tour-summary { background: #f8fafc; border-bottom: 1px solid #f1f5f9; }
 .bt-tour-accordion-content { padding: 14px 18px; }
 .bt-tour-notes-list { list-style: none; padding: 0; margin: 0; }
-.bt-tour-notes-list li { background: #ffffff; margin-bottom: 8px !important; padding: 10px 16px 10px 38px !important; border-radius: 12px; border: 1px solid #f1f5f9; font-size: 14.5px !important; line-height: 1.5 !important; box-shadow: 0 2px 4px rgba(15, 23, 42, 0.02); text-align: left !important; position: relative; overflow-wrap: break-word !important; word-wrap: break-word !important; }
+.bt-tour-notes-list li { background: #ffffff; margin-bottom: 8px !important; padding: 10px 16px 10px 38px !important; border-radius: 12px; border: 1px solid #f1f5f9; font-size: 14.5px !important; line-height: 1.5 !important; font-weight: 400 !important; box-shadow: 0 2px 4px rgba(15, 23, 42, 0.02); text-align: left !important; position: relative; overflow-wrap: break-word !important; word-wrap: break-word !important; }
 .bt-tour-notes-list li:last-child { margin-bottom: 0 !important; }
 .bt-tour-notes-list li::before { content: "•"; position: absolute; left: 15px; top: 6px; color: #1ea1be; font-weight: 900; font-size: 1.6em; line-height: 1; }
 @media (max-width: 768px) {
@@ -1180,30 +1214,28 @@ document.addEventListener('DOMContentLoaded', function () {
 </script>`;
   };
 
-  // 5. TÜM SAYFA (HEPSİ BİR ARADA)
+  // 5. TÜM SAYFA (HEPSİ BİR ARADA) - ÖNEMLİ BİLGİLER DAHİL & HARİÇ'TEN ÖNCE GELİR
   const generateAllHTML = (isPreview = false) => {
     return `${generateProgramHTML(isPreview)}
 
+<!-- ÖNEMLİ BİLGİLER VE NOTLAR (AKORDEON) -->
+<div style="margin-top: 36px !important;">
+  ${generateImportantHTML()}
+</div>
+
 <!-- DAHİL OLAN HİZMETLER -->
-<section class="bt-tourday" style="margin-top: 40px !important;">
+<section class="bt-tourday" style="margin-top: 36px !important;">
   <div class="bt-tour-container">
-    <h2 style="font-size: 22px; font-weight: 800; color: #0f172a; margin-bottom: 16px; text-align: left;">✅ Fiyata Dahil Hizmetler</h2>
     ${generateIncludedHTML()}
   </div>
 </section>
 
-<!-- DAHİL OLMAYAN HİZMETLER -->
-<section class="bt-tourday" style="margin-top: 30px !important;">
+<!-- DAHİL OLMAYAN (HARİÇ) HİZMETLER -->
+<section class="bt-tourday" style="margin-top: 24px !important;">
   <div class="bt-tour-container">
-    <h2 style="font-size: 22px; font-weight: 800; color: #0f172a; margin-bottom: 16px; text-align: left;">❌ Fiyata Dahil Olmayan Hizmetler</h2>
     ${generateExcludedHTML()}
   </div>
-</section>
-
-<!-- ÖNEMLİ BİLGİLER -->
-<div style="margin-top: 30px !important;">
-  ${generateImportantHTML()}
-</div>`;
+</section>`;
   };
 
   // AKTİF SEKMENİN HTML'İNİ AL
@@ -1322,6 +1354,19 @@ document.addEventListener('DOMContentLoaded', function () {
             </span>
           </button>
           <button
+            onClick={() => setActiveTab("important")}
+            className={`px-4 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 cursor-pointer ${
+              activeTab === "important"
+                ? "bg-amber-600 text-white shadow-sm"
+                : "bg-white text-slate-600 hover:bg-slate-50 border border-slate-200"
+            }`}
+          >
+            <span>📌 Önemli Bilgiler ve Notlar</span>
+            <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">
+              {importantNotes.length}
+            </span>
+          </button>
+          <button
             onClick={() => setActiveTab("included")}
             className={`px-4 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 cursor-pointer ${
               activeTab === "included"
@@ -1345,19 +1390,6 @@ document.addEventListener('DOMContentLoaded', function () {
             <span>❌ Dahil Olmayan Hizmetler</span>
             <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">
               {excludedServices.length}
-            </span>
-          </button>
-          <button
-            onClick={() => setActiveTab("important")}
-            className={`px-4 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 cursor-pointer ${
-              activeTab === "important"
-                ? "bg-amber-600 text-white shadow-sm"
-                : "bg-white text-slate-600 hover:bg-slate-50 border border-slate-200"
-            }`}
-          >
-            <span>📌 Önemli Bilgiler ve Notlar</span>
-            <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">
-              {importantNotes.length}
             </span>
           </button>
           <button
@@ -1765,6 +1797,39 @@ document.addEventListener('DOMContentLoaded', function () {
                   </div>
                 </div>
 
+                {/* BAŞLIK DÜZENLEME (İSTEĞE BAĞLI / SİLİNEBİLİR) */}
+                <div className="bg-emerald-50/70 p-3.5 rounded-xl border border-emerald-200 space-y-1">
+                  <div className="flex justify-between items-center">
+                    <label className="block text-xs font-bold text-emerald-900">
+                      Bölüm Başlığı <span className="text-emerald-700 font-normal">(İsteğe bağlı, başlık istemiyorsanız boş bırakabilirsiniz)</span>
+                    </label>
+                    {includedTitle ? (
+                      <button
+                        type="button"
+                        onClick={() => setIncludedTitle("")}
+                        className="text-[11px] text-emerald-700 hover:text-red-600 font-semibold underline cursor-pointer"
+                      >
+                        Başlığı Sil
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setIncludedTitle("Fiyata Dahil Olan Hizmetler")}
+                        className="text-[11px] text-emerald-700 hover:text-emerald-800 font-semibold underline cursor-pointer"
+                      >
+                        Varsayılan Başlığı Ekle
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    value={includedTitle}
+                    onChange={(e) => setIncludedTitle(e.target.value)}
+                    placeholder="Örn: Fiyata Dahil Olan Hizmetler (İstemiyorsanız tamamen boş bırakın)"
+                    className="w-full bg-white border border-emerald-300 rounded-lg p-2 text-sm outline-none focus:border-emerald-600 font-medium"
+                  />
+                </div>
+
                 <div className="space-y-2">
                   {includedServices.map((item, idx) => (
                     <div
@@ -1821,6 +1886,39 @@ document.addEventListener('DOMContentLoaded', function () {
                       + Madde Ekle
                     </button>
                   </div>
+                </div>
+
+                {/* BAŞLIK DÜZENLEME (İSTEĞE BAĞLI / SİLİNEBİLİR) */}
+                <div className="bg-rose-50/70 p-3.5 rounded-xl border border-rose-200 space-y-1">
+                  <div className="flex justify-between items-center">
+                    <label className="block text-xs font-bold text-rose-900">
+                      Bölüm Başlığı <span className="text-rose-700 font-normal">(İsteğe bağlı, başlık istemiyorsanız boş bırakabilirsiniz)</span>
+                    </label>
+                    {excludedTitle ? (
+                      <button
+                        type="button"
+                        onClick={() => setExcludedTitle("")}
+                        className="text-[11px] text-rose-700 hover:text-red-600 font-semibold underline cursor-pointer"
+                      >
+                        Başlığı Sil
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setExcludedTitle("Fiyata Dahil Olmayan Hizmetler")}
+                        className="text-[11px] text-rose-700 hover:text-rose-800 font-semibold underline cursor-pointer"
+                      >
+                        Varsayılan Başlığı Ekle
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    value={excludedTitle}
+                    onChange={(e) => setExcludedTitle(e.target.value)}
+                    placeholder="Örn: Fiyata Dahil Olmayan Hizmetler (İstemiyorsanız tamamen boş bırakın)"
+                    className="w-full bg-white border border-rose-300 rounded-lg p-2 text-sm outline-none focus:border-rose-600 font-medium"
+                  />
                 </div>
 
                 <div className="space-y-2">
