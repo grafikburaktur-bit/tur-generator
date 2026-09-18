@@ -1118,19 +1118,20 @@ export default function TurOlusturucu() {
     if (isWord) {
       setIsPdfLoading(true);
       try {
-        // Mammoth.js kütüphanesini yükle
+        // Mammoth.js kütüphanesini güvenli yükle (CDN + yerel fallback)
         // @ts-ignore
         if (!window.mammoth) {
           await new Promise((resolve, reject) => {
             const script = document.createElement("script");
-            script.src = "mammoth.browser.min.js";
+            script.src = "https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.8.0/mammoth.browser.min.js";
             script.onload = resolve;
             script.onerror = () => {
-              const cdnScript = document.createElement("script");
-              cdnScript.src = "https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.8.0/mammoth.browser.min.js";
-              cdnScript.onload = resolve;
-              cdnScript.onerror = reject;
-              document.head.appendChild(cdnScript);
+              const localScript = document.createElement("script");
+              const basePath = typeof window !== "undefined" && window.location.pathname.startsWith("/tur-generator") ? "/tur-generator" : "";
+              localScript.src = `${basePath}/mammoth.browser.min.js`;
+              localScript.onload = resolve;
+              localScript.onerror = reject;
+              document.head.appendChild(localScript);
             };
             document.head.appendChild(script);
           });
@@ -2810,21 +2811,31 @@ ${d.content}`;
             </div>
 
             {/* DOSYA YÜKLEME ALANI (SÜRÜKLE - BIRAK) */}
-            <div className="border-2 border-dashed border-indigo-200 hover:border-indigo-400 rounded-2xl p-5 text-center bg-indigo-50/50 transition-colors">
+            <div
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                  const fakeEvent = { target: { files: e.dataTransfer.files } } as any;
+                  handleFileUpload(fakeEvent);
+                }
+              }}
+              className="border-2 border-dashed border-indigo-200 hover:border-indigo-400 rounded-2xl p-5 text-center bg-indigo-50/50 transition-colors"
+            >
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".pdf,.txt"
+                accept=".docx,.doc,.pdf,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,application/pdf"
                 onChange={handleFileUpload}
                 className="hidden"
               />
               <div className="flex flex-col items-center gap-2">
-                <span className="text-3xl">📄</span>
+                <span className="text-3xl">📑</span>
                 <p className="text-sm font-bold text-indigo-900">
-                  {isPdfLoading ? "PDF Dosyası Okunuyor & Kalın Yazılar Çözümleniyor..." : "PDF Dosyasını Seçin veya Buraya Sürükleyin"}
+                  {isPdfLoading ? "Dosya Okunuyor & Kalın Yazılar Çözümleniyor..." : "Word (.docx) veya PDF Dosyasını Seçin ya da Buraya Sürükleyin"}
                 </p>
                 <p className="text-xs text-slate-500">
-                  Desteklenen formatlar: .pdf, .txt (PDF'teki tüm kalın/bold yazılar korunur)
+                  Desteklenen formatlar: <strong className="text-indigo-600">.docx (Word)</strong>, <strong className="text-indigo-600">.pdf</strong>, .txt (Word ve PDF'teki tüm kalın/bold yazılar korunur)
                 </p>
                 <button
                   type="button"
@@ -2832,7 +2843,7 @@ ${d.content}`;
                   disabled={isPdfLoading}
                   className="mt-1 bg-white border border-indigo-200 hover:bg-indigo-50 text-indigo-700 text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-xs cursor-pointer"
                 >
-                  {isPdfLoading ? "⏳ Okunuyor..." : "Bilgisayardan Dosya Seç"}
+                  {isPdfLoading ? "⏳ Okunuyor..." : "Bilgisayardan Word (.docx) veya PDF Seç"}
                 </button>
               </div>
             </div>
