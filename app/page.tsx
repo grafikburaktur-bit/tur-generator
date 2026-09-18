@@ -270,32 +270,6 @@ export default function TurOlusturucu() {
   const [aiTestResult, setAiTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [autoBoldOnImport, setAutoBoldOnImport] = useState(true);
 
-  // API ANAHTARINI TEST ETME FONKSİYONU
-  const testAiKey = async () => {
-    if (!geminiApiKey.trim()) {
-      setAiTestResult({ success: false, message: "Lütfen önce bir API anahtarı giriniz." });
-      return;
-    }
-    setIsAiTesting(true);
-    setAiTestResult(null);
-    try {
-      const res = await callGeminiAi(geminiApiKey, "Merhaba, sadece 'TAMAM' yaz.");
-      if (res) {
-        setAiTestResult({
-          success: true,
-          message: "✓ Tebrikler! Google Gemini API bağlantısı başarıyla kuruldu. Sistem aktif."
-        });
-      }
-    } catch (err: any) {
-      setAiTestResult({
-        success: false,
-        message: "❌ Bağlantı Başarısız: " + err.message
-      });
-    } finally {
-      setIsAiTesting(false);
-    }
-  };
-
   // Sayfa yüklendiğinde kayıtlı API anahtarını al
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -308,6 +282,69 @@ export default function TurOlusturucu() {
     setGeminiApiKey(key);
     if (typeof window !== "undefined") {
       localStorage.setItem("bt_gemini_key", key);
+    }
+  };
+
+  // API ANAHTARINI TEST ETME FONKSİYONU
+  const testAiKey = async () => {
+    const cleanKey = geminiApiKey.trim();
+    if (!cleanKey) {
+      setAiTestResult({ success: false, message: "Lütfen önce bir API anahtarı giriniz." });
+      return;
+    }
+    setIsAiTesting(true);
+    setAiTestResult(null);
+    try {
+      // 1. Google ListModels sorgula
+      const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`);
+      const listData = await listRes.json().catch(() => ({}));
+
+      if (!listRes.ok) {
+        const errMsg = listData.error?.message || `HTTP ${listRes.status}: ${listRes.statusText}`;
+        throw new Error(`Google API Hatası: ${errMsg}`);
+      }
+
+      const models: any[] = listData.models || [];
+      const supported = models.filter((m: any) =>
+        Array.isArray(m.supportedGenerationMethods) &&
+        m.supportedGenerationMethods.includes("generateContent")
+      );
+
+      if (supported.length === 0) {
+        throw new Error(
+          `API anahtarı geçerli fakat bu anahtar için generateContent destekleyen model bulunamadı. Lütfen aistudio.google.com üzerinden yeni bir Gemini anahtarı oluşturunuz.`
+        );
+      }
+
+      // En uygun modeli seç ve test üretimi yap
+      const targetModel = supported.find((m: any) => m.name.includes("flash")) || supported[0];
+      const modelName = targetModel.name.replace(/^models\//, "");
+
+      const genUrl = `https://generativelanguage.googleapis.com/v1beta/${targetModel.name}:generateContent?key=${cleanKey}`;
+      const genRes = await fetch(genUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: "Merhaba, sadece TAMAM yaz." }] }],
+        }),
+      });
+
+      if (!genRes.ok) {
+        const genErr = await genRes.json().catch(() => ({}));
+        throw new Error(`Model (${modelName}) hatası: ` + (genErr.error?.message || genRes.statusText));
+      }
+
+      setAiTestResult({
+        success: true,
+        message: `✓ Başarılı! Google Gemini API bağlantısı kuruldu. Aktif Model: ${modelName}`
+      });
+    } catch (err: any) {
+      setAiTestResult({
+        success: false,
+        message: "❌ " + err.message
+      });
+    } finally {
+      setIsAiTesting(false);
     }
   };
 
@@ -652,83 +689,63 @@ export default function TurOlusturucu() {
     const cleanKey = apiKey.trim();
     if (!cleanKey) throw new Error("Lütfen bir Google Gemini API anahtarı giriniz.");
 
-    // 1. ADIM: Google ListModels servisinden bu anahtarın yetkili olduğu modelleri çek
-    let selectedModel = "";
+    // 1. Önce ListModels ile bu anahtarın yetkili olduğu modelleri Google sunucusundan çek
+    let modelPath = "";
     try {
       const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`);
       if (listRes.ok) {
         const listData = await listRes.json();
         const models: any[] = listData.models || [];
-        const supported = models.filter((m) =>
+        const supported = models.filter((m: any) =>
           Array.isArray(m.supportedGenerationMethods) &&
           m.supportedGenerationMethods.includes("generateContent")
         );
-        // Öncelik sıralaması: flash > 2.0 > gemini > herhangi bir desteklenen model
         const best =
-          supported.find((m) => m.name.includes("flash")) ||
-          supported.find((m) => m.name.includes("gemini-2")) ||
-          supported.find((m) => m.name.includes("gemini")) ||
+          supported.find((m: any) => m.name.includes("flash")) ||
+          supported.find((m: any) => m.name.includes("2.0")) ||
+          supported.find((m: any) => m.name.includes("gemini")) ||
           supported[0];
-
         if (best && best.name) {
-          selectedModel = best.name.replace(/^models\//, "");
-        }
-      } else {
-        const errJson = await listRes.json().catch(() => ({}));
-        if (errJson.error?.message) {
-          throw new Error(errJson.error.message);
+          modelPath = best.name;
         }
       }
-    } catch (e: any) {
-      if (e.message && !e.message.includes("fetch")) {
-        throw new Error(e.message);
-      }
-    }
+    } catch (e) {}
 
-    // 2. ADIM: Seçilen veya aday modelleri sırayla dene
-    const candidateModels = selectedModel
-      ? [selectedModel, "gemini-1.5-flash-latest", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-pro"]
-      : ["gemini-1.5-flash-latest", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-pro"];
+    const candidatePaths = Array.from(new Set([
+      modelPath,
+      "models/gemini-1.5-flash",
+      "models/gemini-1.5-flash-latest",
+      "models/gemini-2.0-flash",
+      "models/gemini-1.5-pro"
+    ].filter(Boolean)));
 
-    let lastErrorMsg = "";
+    let lastError = "";
+    for (const mPath of candidatePaths) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/${mPath}:generateContent?key=${cleanKey}`;
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.1 },
+          }),
+        });
 
-    for (const model of candidateModels) {
-      const urls = [
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`,
-        `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${cleanKey}`
-      ];
-
-      for (const url of urls) {
-        try {
-          const response = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: prompt }] }],
-              generationConfig: {
-                temperature: 0.1,
-              },
-            }),
-          });
-
-          if (response.ok) {
-            const data = await response.json();
-            const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (text) return text;
-          } else {
-            const errData = await response.json().catch(() => ({}));
-            lastErrorMsg = errData.error?.message || response.statusText;
-          }
-        } catch (e: any) {
-          lastErrorMsg = e.message;
+        if (response.ok) {
+          const data = await response.json();
+          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (text) return text;
+        } else {
+          const errData = await response.json().catch(() => ({}));
+          lastError = errData.error?.message || response.statusText;
         }
+      } catch (e: any) {
+        lastError = e.message;
       }
     }
 
-    throw new Error(
-      lastErrorMsg ||
-      "API anahtarınız doğrulanamadı. Lütfen aistudio.google.com adresinden yeni bir 'Gemini API Key' oluşturup deneyiniz."
-    );
+    throw new Error(lastError || "Gemini API yanıt vermedi.");
   };
 
   // METİN İÇERİSİNDE SEÇİLİ YAZIYI KALIN (BOLD) YAPMA / KALDIRMA
