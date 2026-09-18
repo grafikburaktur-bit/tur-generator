@@ -264,17 +264,20 @@ export default function TurOlusturucu() {
 
   // YAPAY ZEKA VE OTOMATİK KALINLAŞTIRMA DURUMLARI
   const [geminiApiKey, setGeminiApiKey] = useState<string>("");
+  const [activeAiModel, setActiveAiModel] = useState<string>("gemini-1.5-flash");
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [isAiTesting, setIsAiTesting] = useState(false);
   const [aiTestResult, setAiTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [autoBoldOnImport, setAutoBoldOnImport] = useState(true);
 
-  // Sayfa yüklendiğinde kayıtlı API anahtarını al
+  // Sayfa yüklendiğinde kayıtlı API anahtarını ve aktif modeli al
   useEffect(() => {
     if (typeof window !== "undefined") {
       const savedKey = localStorage.getItem("bt_gemini_key");
       if (savedKey) setGeminiApiKey(savedKey);
+      const savedModel = localStorage.getItem("bt_gemini_active_model");
+      if (savedModel) setActiveAiModel(savedModel);
     }
   }, []);
 
@@ -285,7 +288,7 @@ export default function TurOlusturucu() {
     }
   };
 
-  // API ANAHTARINI TEST ETME FONKSİYONU
+  // API ANAHTARINI TEST ETME FONKSİYONU (KESİNTİSİZ & ÇOKLU MODEL YEDEKLİ)
   const testAiKey = async () => {
     const cleanKey = geminiApiKey.trim();
     if (!cleanKey) {
@@ -294,49 +297,86 @@ export default function TurOlusturucu() {
     }
     setIsAiTesting(true);
     setAiTestResult(null);
-    try {
-      // 1. Google ListModels sorgula
-      const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`);
-      const listData = await listRes.json().catch(() => ({}));
 
-      if (!listRes.ok) {
-        const errMsg = listData.error?.message || `HTTP ${listRes.status}: ${listRes.statusText}`;
-        throw new Error(`Google API Hatası: ${errMsg}`);
+    try {
+      // 1. En kararlı ve kotası en yüksek temel modeller
+      let candidateNames = [
+        "gemini-1.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-pro",
+        "gemini-2.0-flash-exp"
+      ];
+
+      // 2. Google ListModels sorgula ve desteklenen modelleri listeye ekle
+      try {
+        const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`);
+        if (listRes.ok) {
+          const listData = await listRes.json();
+          const models: any[] = listData.models || [];
+          const supported = models
+            .filter((m: any) =>
+              Array.isArray(m.supportedGenerationMethods) &&
+              m.supportedGenerationMethods.includes("generateContent")
+            )
+            .map((m: any) => m.name.replace(/^models\//, ""))
+            // Kararsız/deneysel/kullanım dışı uç modelleri filtrele
+            .filter((name: string) => !name.includes("preview") && !name.includes("medium") && !name.includes("2.5"));
+
+          // Standart modelleri öncelikli tutarak birleştir
+          candidateNames = Array.from(new Set([...candidateNames, ...supported]));
+        }
+      } catch (listErr) {
+        console.warn("ListModels alınamadı, standart modeller denenecek:", listErr);
       }
 
-      const models: any[] = listData.models || [];
-      const supported = models.filter((m: any) =>
-        Array.isArray(m.supportedGenerationMethods) &&
-        m.supportedGenerationMethods.includes("generateContent")
-      );
+      // Kullanıcının kayıtlı modeli varsa en başa al
+      if (activeAiModel && candidateNames.includes(activeAiModel)) {
+        candidateNames = [activeAiModel, ...candidateNames.filter((m) => m !== activeAiModel)];
+      }
 
-      if (supported.length === 0) {
+      let workingModel = "";
+      let errorLog: string[] = [];
+
+      // Modelleri sırayla test et, İLK ÇALIŞAN modeli onayla!
+      for (const modelName of candidateNames) {
+        try {
+          const genUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${cleanKey}`;
+          const genRes = await fetch(genUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: "ping" }] }],
+            }),
+          });
+
+          if (genRes.ok) {
+            workingModel = modelName;
+            break; // Başarılı!
+          } else {
+            const errData = await genRes.json().catch(() => ({}));
+            const msg = errData.error?.message || `HTTP ${genRes.status}`;
+            errorLog.push(`${modelName}: ${msg}`);
+          }
+        } catch (e: any) {
+          errorLog.push(`${modelName}: ${e.message}`);
+        }
+      }
+
+      if (!workingModel) {
         throw new Error(
-          `API anahtarı geçerli fakat bu anahtar için generateContent destekleyen model bulunamadı. Lütfen aistudio.google.com üzerinden yeni bir Gemini anahtarı oluşturunuz.`
+          `Hiçbir Gemini modeli yanıt vermedi. Son hata: ${errorLog[errorLog.length - 1] || "Bilinmeyen hata"}`
         );
       }
 
-      // En uygun modeli seç ve test üretimi yap
-      const targetModel = supported.find((m: any) => m.name.includes("flash")) || supported[0];
-      const modelName = targetModel.name.replace(/^models\//, "");
-
-      const genUrl = `https://generativelanguage.googleapis.com/v1beta/${targetModel.name}:generateContent?key=${cleanKey}`;
-      const genRes = await fetch(genUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: "Merhaba, sadece TAMAM yaz." }] }],
-        }),
-      });
-
-      if (!genRes.ok) {
-        const genErr = await genRes.json().catch(() => ({}));
-        throw new Error(`Model (${modelName}) hatası: ` + (genErr.error?.message || genRes.statusText));
+      setActiveAiModel(workingModel);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("bt_gemini_active_model", workingModel);
       }
 
       setAiTestResult({
         success: true,
-        message: `✓ Başarılı! Google Gemini API bağlantısı kuruldu. Aktif Model: ${modelName}`
+        message: `✓ Başarılı! Google Gemini API bağlantısı kuruldu. Aktif Model: ${workingModel}`
       });
     } catch (err: any) {
       setAiTestResult({
@@ -684,45 +724,27 @@ export default function TurOlusturucu() {
   // =========================================================================
   // MOD B: GOOGLE GEMINI YAPAY ZEKA MOTORU (OPSİYONEL & KESİNTİ GÜVENCELİ)
   // =========================================================================
-  // GOOGLE GEMINI DİNAMİK MODEL ÇAĞIRICI
+  // GOOGLE GEMINI DİNAMİK MODEL ÇAĞIRICI (KESİNTİSİZ & OTOMATİK YEDEKLEME)
   const callGeminiAi = async (apiKey: string, prompt: string): Promise<string> => {
     const cleanKey = apiKey.trim();
     if (!cleanKey) throw new Error("Lütfen bir Google Gemini API anahtarı giriniz.");
 
-    // 1. Önce ListModels ile bu anahtarın yetkili olduğu modelleri Google sunucusundan çek
-    let modelPath = "";
-    try {
-      const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`);
-      if (listRes.ok) {
-        const listData = await listRes.json();
-        const models: any[] = listData.models || [];
-        const supported = models.filter((m: any) =>
-          Array.isArray(m.supportedGenerationMethods) &&
-          m.supportedGenerationMethods.includes("generateContent")
-        );
-        const best =
-          supported.find((m: any) => m.name.includes("flash")) ||
-          supported.find((m: any) => m.name.includes("2.0")) ||
-          supported.find((m: any) => m.name.includes("gemini")) ||
-          supported[0];
-        if (best && best.name) {
-          modelPath = best.name;
-        }
-      }
-    } catch (e) {}
-
-    const candidatePaths = Array.from(new Set([
-      modelPath,
-      "models/gemini-1.5-flash",
-      "models/gemini-1.5-flash-latest",
-      "models/gemini-2.0-flash",
-      "models/gemini-1.5-pro"
-    ].filter(Boolean)));
+    const candidateModels = Array.from(
+      new Set([
+        activeAiModel,
+        "gemini-1.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-pro",
+        "gemini-2.0-flash-exp"
+      ].filter(Boolean))
+    );
 
     let lastError = "";
-    for (const mPath of candidatePaths) {
+
+    for (const model of candidateModels) {
       try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/${mPath}:generateContent?key=${cleanKey}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`;
         const response = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -735,17 +757,28 @@ export default function TurOlusturucu() {
         if (response.ok) {
           const data = await response.json();
           const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (text) return text;
+          if (text) {
+            if (activeAiModel !== model) {
+              setActiveAiModel(model);
+              if (typeof window !== "undefined") {
+                localStorage.setItem("bt_gemini_active_model", model);
+              }
+            }
+            return text;
+          }
         } else {
           const errData = await response.json().catch(() => ({}));
-          lastError = errData.error?.message || response.statusText;
+          const msg = errData.error?.message || response.statusText;
+          lastError = `${model}: ${msg}`;
+          console.warn(`Gemini (${model}) başarısız, sonraki modele geçiliyor:`, msg);
         }
       } catch (e: any) {
-        lastError = e.message;
+        lastError = `${model}: ${e.message}`;
+        console.warn(`Gemini (${model}) bağlantı hatası, sonraki modele geçiliyor:`, e.message);
       }
     }
 
-    throw new Error(lastError || "Gemini API yanıt vermedi.");
+    throw new Error(lastError || "Gemini modellerinin hiçbiri yanıt vermedi.");
   };
 
   // METİN İÇERİSİNDE SEÇİLİ YAZIYI KALIN (BOLD) YAPMA / KALDIRMA
