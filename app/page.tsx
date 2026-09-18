@@ -720,16 +720,26 @@ export default function TurOlusturucu() {
       features.push("🧭 Profesyonel Türkçe Rehberlik");
     }
 
-    // Ek Güvence / Yedek Maddeler
-    if (features.length < 4 && incList.some((it) => /sigorta/i.test(it))) {
-      features.push("🛡️ Kapsamlı Seyahat Sigortası Dahil");
-    }
-    if (features.length < 4 && incList.some((it) => /transfer/i.test(it))) {
-      features.push("🚐 Özel Klimalı Araçlarla Transfer");
+    // Kesinlikle havayolu (THY, uçak vb.) içermeyen temiz filtreleme
+    let clean = features.filter((f) => !/hava\s*yol|thy|uçak\s+bileti/i.test(f));
+
+    // TAM 6 MADDE GARANTİSİ (Hero kartı 2x3 veya 3x2 simetrik ve dolu görünsün)
+    const fallbackBadges = [
+      "🚐 Tüm Şehirlerarası & Havalimanı Transferleri",
+      "🛡️ Kapsamlı Seyahat Sigortası Dahil",
+      "🧭 Profesyonel Türkçe Rehberlik Hizmeti",
+      "💎 Burak Turizm Kalitesi ve Güvencesi"
+    ];
+
+    for (const badge of fallbackBadges) {
+      if (clean.length >= 6) break;
+      const alreadyHas = clean.some(c => c.toLowerCase().includes(badge.slice(3, 10).toLowerCase()));
+      if (!alreadyHas) {
+        clean.push(badge);
+      }
     }
 
-    // Kesinlikle havayolu (THY, uçak vb.) içermeyen temiz liste
-    return features.filter((f) => !/hava\s*yol|thy|uçak\s+bileti/i.test(f)).slice(0, 6);
+    return clean.slice(0, 6);
   };
 
   // =========================================================================
@@ -1771,12 +1781,13 @@ ${currentContent}`;
     setIsAiLoading(true);
     try {
       // 1. Hero maddelerini AI ile çıkar (Havayolu hariç!)
-      const heroPrompt = `Aşağıdaki tur başlığı ve dahil olan hizmetler listesine bakarak, Burak Turizm tur üst kartı için en can alıcı 4-6 kısa özellik maddesi üret.
+      const heroPrompt = `Aşağıdaki tur başlığı ve dahil olan hizmetler listesine bakarak, Burak Turizm tur üst kartı için TAM OLARAK 6 ADET can alıcı kısa özellik maddesi üret.
 KURALLAR:
 1. KESİNLİKLE havayolu (THY ile, uçak vb.) EKLEME.
-2. Akşam yemekleri (örn: 🍱 8 Akşam Yemeği Dahil), konaklama (örn: 🏨 5* Oteller & Cruise), girişler (örn: 🎫 Tüm Müze Girişleri Dahil), ekstra tur şartı (örn: ✅ Ekstra Tur Ödemesi Yok), ülke sayısı (örn: 🏰 4 Ülke & 4 Başkent), rehberlik (örn: 🧭 Profesyonel Türkçe Rehberlik) gibi konuları ele al.
-3. Her maddenin başına uygun tek bir emoji koy.
-4. SADECE geçerli bir JSON string dizisi döndür (Örnek: ["🍱 8 Akşam Yemeği Dahil", "🏨 5 Yıldızlı Oteller"]). Başka hiçbir açıklama yazma.
+2. TAM 6 MADDE OLMALIDIR (Eksik veya fazla olmamalı).
+3. Akşam yemekleri (örn: 🍱 8 Akşam Yemeği Dahil), konaklama (örn: 🏨 4* & 5* Oteller), girişler (örn: 🎫 Tüm Müze ve Ören Yeri Girişleri Dahil), ekstra tur şartı (örn: ✅ Ekstra Tur Ödemesi Yok), rehberlik (örn: 🧭 Profesyonel Türkçe Rehberlik), transferler (örn: 🚐 Tüm Transferler Dahil), tur güvencesi gibi konuları ele al.
+4. Her maddenin başına uygun tek bir emoji koy.
+5. SADECE geçerli bir JSON string dizisi döndür (Örnek: ["🏨 4* ve 5* Otellerde Konaklama", "🍱 8 Akşam Yemeği Dahil", "🎫 Tüm Müze Girişleri Dahil", "🧭 Profesyonel Türkçe Rehberlik", "🚐 Tüm Transferler Dahil", "✅ Ekstra Tur Ödemesi Yok"]). Başka hiçbir açıklama yazma.
 
 Tur Başlığı: ${hero.title}
 Dahil Olanlar:
@@ -1789,9 +1800,19 @@ ${includedServices.join("\n")}`;
           const parsed = JSON.parse(jsonMatch[0]);
           if (Array.isArray(parsed) && parsed.length > 0) {
             // Havayolu içermeyenleri al
-            const cleanFeatures = parsed.filter((f: string) => !/hava\s*yol|thy|uçak/i.test(f)).slice(0, 6);
+            let cleanFeatures = parsed.filter((f: string) => !/hava\s*yol|thy|uçak/i.test(f));
+            const fallbacks = [
+              "🚐 Tüm Transferler Dahil",
+              "🛡️ Kapsamlı Seyahat Sigortası Dahil",
+              "🧭 Profesyonel Türkçe Rehberlik",
+              "💎 Burak Turizm Kalitesiyle"
+            ];
+            for (const fb of fallbacks) {
+              if (cleanFeatures.length >= 6) break;
+              if (!cleanFeatures.includes(fb)) cleanFeatures.push(fb);
+            }
             if (cleanFeatures.length > 0) {
-              setHero((prev) => ({ ...prev, features: cleanFeatures }));
+              setHero((prev) => ({ ...prev, features: cleanFeatures.slice(0, 6) }));
             }
           }
         }
