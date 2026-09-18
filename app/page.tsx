@@ -631,6 +631,17 @@ export default function TurOlusturucu() {
       "Müzesi(?:[’'][a-zçğıöşü]+)?",
       "Meydanı(?:[’'][a-zçğıöşü]+)?",
       "Köprüsü(?:[’'][a-zçğıöşü]+)?",
+      "Katedrali(?:[’'][a-zçğıöşü]+)?",
+      "Kilisesi(?:[’'][a-zçğıöşü]+)?",
+      "Manastırı(?:[’'][a-zçğıöşü]+)?",
+      "Kapısı(?:[’'][a-zçğıöşü]+)?",
+      "Kulesi(?:[’'][a-zçğıöşü]+)?",
+      "Anıtı(?:[’'][a-zçğıöşü]+)?",
+      "Heykeli(?:[’'][a-zçğıöşü]+)?",
+      "Gölü(?:[’'][a-zçğıöşü]+)?",
+      "Nehri(?:[’'][a-zçğıöşü]+)?",
+      "Kanalı(?:[’'][a-zçğıöşü]+)?",
+      "Parkı(?:[’'][a-zçğıöşü]+)?",
       "Tünelleri(?:[’'][a-zçğıöşü]+)?",
       "Pazarı(?:[’'][a-zçğıöşü]+)?",
       "Çarşısı(?:[’'][a-zçğıöşü]+)?",
@@ -645,7 +656,7 @@ export default function TurOlusturucu() {
     } catch (e) {}
 
     // 6. Sabit dünya mirası / özel mekan terimleri
-    const specialTerms = ["UNESCO Dünya Mirası", "Eski Mahalle", "Tren Sokağı", "Angkor Wat", "Lebi Havuz", "Check-in", "THY"];
+    const specialTerms = ["UNESCO Dünya Mirası", "Eski Mahalle", "Tren Sokağı", "Angkor Wat", "Lebi Havuz", "Check-in", "Türk Hava Yolları", "THY"];
     specialTerms.forEach((term) => {
       try {
         const r = new RegExp(`(?<!<b>)(${term})(?!<\\/b>)`, "gi");
@@ -749,22 +760,34 @@ export default function TurOlusturucu() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            systemInstruction: {
+              parts: [{
+                text: "Sen Burak Turizm için sadece HTML biçimlendirme yapan bir asistansın. ASLA düşünce süreci, kural analizi, 'Input text:', 'Task:', 'Constraint', açıklama veya yorum yazma. Yanıtın SADECE ve DOĞRUDAN biçimlendirilmiş metnin kendisi olmalıdır."
+              }]
+            },
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.1 },
+            generationConfig: {
+              temperature: 0.0
+            }
           }),
         });
 
         if (response.ok) {
           const data = await response.json();
-          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (text) {
-            if (activeAiModel !== model) {
-              setActiveAiModel(model);
-              if (typeof window !== "undefined") {
-                localStorage.setItem("bt_gemini_active_model", model);
+          const candidate = data.candidates?.[0];
+          if (candidate?.content?.parts) {
+            // Sadece düşünce (thought) OLMAYAN gerçek içerik parçalarını birleştir
+            const nonThoughtParts = candidate.content.parts.filter((p: any) => !p.thought);
+            const text = nonThoughtParts.map((p: any) => p.text || "").join("").trim();
+            if (text) {
+              if (activeAiModel !== model) {
+                setActiveAiModel(model);
+                if (typeof window !== "undefined") {
+                  localStorage.setItem("bt_gemini_active_model", model);
+                }
               }
+              return text;
             }
-            return text;
           }
         } else {
           const errData = await response.json().catch(() => ({}));
@@ -779,6 +802,39 @@ export default function TurOlusturucu() {
     }
 
     throw new Error(lastError || "Gemini modellerinin hiçbiri yanıt vermedi.");
+  };
+
+  // YAPAY ZEKA ÇIKTISINI TEMİZLEME VE DÜŞÜNCE ARTIKLARINI ELİMİNE ETME
+  const sanitizeAiTextOutput = (aiText: string, originalText: string, destinations: string[] = []): string => {
+    if (!aiText) return autoBoldDayContent(originalText, destinations);
+
+    let cleaned = aiText.trim();
+    // Markdown code block kalıntılarını kaldır
+    cleaned = cleaned.replace(/^```(?:html)?s*/i, "").replace(/s*```$/i, "").trim();
+
+    // Modelin iç düşünce / scratchpad döküntüsü içerip içermediğini denetle
+    const hasThoughtArtifacts =
+      /(\bInput text:|\bTask:|\bConstraint\b|Refining the|Self-Correction|Final (?:string|result|check):|NLP tasks)/i.test(cleaned);
+
+    if (hasThoughtArtifacts) {
+      // "Final string:" veya "Result:" sonrası kısmı bulmaya çalış
+      const finalMatch = cleaned.match(/(?:Final string|Final Result|Result)\s*:\s*\n*([\s\S]+)$/i);
+      if (finalMatch && finalMatch[1] && finalMatch[1].trim()) {
+        cleaned = finalMatch[1].trim();
+      } else {
+        // Eğer düşünce metni ayıklanamıyorsa, bozuk AI çıktısını reddet ve güvenli yerel motoru çalıştır!
+        console.warn("AI çıktısında düşünce kalıntıları tespit edildi, güvenli yerel motor devreye alındı.");
+        return autoBoldDayContent(originalText, destinations);
+      }
+    }
+
+    // Uzunluk kontrolü: AI çıktısı orijinal metnin 2 katından uzunsa veya yarısından kısaysa bozuktur
+    if (cleaned.length > originalText.length * 2.2 || cleaned.length < originalText.length * 0.4) {
+      console.warn("AI çıktısı anormal uzunlukta, güvenli yerel motor devreye alındı.");
+      return autoBoldDayContent(originalText, destinations);
+    }
+
+    return cleaned;
   };
 
   // METİN İÇERİSİNDE SEÇİLİ YAZIYI KALIN (BOLD) YAPMA / KALDIRMA
@@ -1628,6 +1684,28 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   };
 
+  // TÜM GÜNLERİ YEREL KURAL MOTORUYLA KALINLAŞTIR (KESİN & HATASIZ)
+  const handleApplyLocalAutoBoldAllDays = () => {
+    const updated = days.map((d) => {
+      // Eğer metinde önceki bozuk AI kalıntıları varsa temizle
+      let cleanInput = d.content;
+      if (/(\bInput text:|\bTask:|\bConstraint\b|Refining the|Final string:)/i.test(cleanInput)) {
+        const m = cleanInput.match(/(?:Final string|Final Result|Result)\s*:\s*\n*([\s\S]+)$/i);
+        if (m && m[1]) cleanInput = m[1].trim();
+        else {
+          cleanInput = cleanInput.split("\n").filter(l => !/^\s*\*\s*(Input text|Task|Constraint|Refining|Self-Correction|Check)/i.test(l)).join("\n").trim();
+        }
+      }
+      return {
+        ...d,
+        content: autoBoldDayContent(cleanInput, [hero.title, hero.subtitle])
+      };
+    });
+    setDays(updated);
+    setImportMessage("✓ Tüm günler yerel kural motoruyla tertemiz kalınlaştırıldı.");
+    setTimeout(() => setImportMessage(null), 3000);
+  };
+
   // GENEL KOPYALAMA (SEKME BAZLI)
   const copyHTML = (tab: "program" | "included" | "excluded" | "important" | "all") => {
     let content = "";
@@ -1669,11 +1747,10 @@ Metin:
 ${currentContent}`;
 
       const aiResult = await callGeminiAi(geminiApiKey, prompt);
-      if (aiResult && aiResult.trim()) {
-        updateDay(dayId, "content", aiResult.trim());
-        setImportMessage("✓ Yapay zeka günü başarıyla analiz etti ve kalınlaştırdı.");
-        setTimeout(() => setImportMessage(null), 3000);
-      }
+      const safeContent = sanitizeAiTextOutput(aiResult, currentContent, [hero.title, hero.subtitle]);
+      updateDay(dayId, "content", safeContent);
+      setImportMessage("✓ Gün başarıyla analiz edildi ve kalınlaştırıldı.");
+      setTimeout(() => setImportMessage(null), 3000);
     } catch (err: any) {
       alert("Yapay zekaya ulaşılamadı: " + err.message + "\nYerel kural motoru devreye alınıyor.");
       // Fallback to local auto-bold
@@ -1727,7 +1804,8 @@ ${includedServices.join("\n")}`;
 Metin:
 ${d.content}`;
             const bolded = await callGeminiAi(geminiApiKey, dayPrompt);
-            return { ...d, content: bolded.trim() || d.content };
+            const safeContent = sanitizeAiTextOutput(bolded, d.content, [hero.title, hero.subtitle]);
+            return { ...d, content: safeContent };
           } catch (e) {
             return d;
           }
