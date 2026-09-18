@@ -1641,12 +1641,27 @@ ${d.content}`;
             </p>
           </div>
           <div className="flex items-center flex-wrap gap-2.5">
-            {/* AKILLI PDF / METİN AKTARMA BUTONU */}
+            {/* YAPAY ZEKA ASİSTANI BUTONU */}
+            <button
+              onClick={() => setIsAiModalOpen(true)}
+              className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow-md transition-all flex items-center gap-2 cursor-pointer active:scale-95 border border-emerald-500/30"
+              title="Google Gemini Yapay Zeka ile turu analiz edin ve zenginleştirin"
+            >
+              <span className="text-base">🤖</span>
+              <span>Yapay Zeka (AI)</span>
+              {geminiApiKey ? (
+                <span className="w-2.5 h-2.5 rounded-full bg-lime-300 animate-pulse inline-block" title="AI Aktif" />
+              ) : (
+                <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded font-normal">Ayarla</span>
+              )}
+            </button>
+
+            {/* AKILLI WORD / PDF / METİN AKTARMA BUTONU */}
             <button
               onClick={() => setIsImportModalOpen(true)}
               className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow-md transition-all flex items-center gap-2 cursor-pointer active:scale-95"
             >
-              <span>✨ PDF / Metin İle Otomatik Doldur</span>
+              <span>📄 Word / PDF / Metin Yükle</span>
             </button>
             <button
               onClick={() => copyHTML(activeTab)}
