@@ -266,7 +266,35 @@ export default function TurOlusturucu() {
   const [geminiApiKey, setGeminiApiKey] = useState<string>("");
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
   const [isAiLoading, setIsAiLoading] = useState(false);
+  const [isAiTesting, setIsAiTesting] = useState(false);
+  const [aiTestResult, setAiTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [autoBoldOnImport, setAutoBoldOnImport] = useState(true);
+
+  // API ANAHTARINI TEST ETME FONKSİYONU
+  const testAiKey = async () => {
+    if (!geminiApiKey.trim()) {
+      setAiTestResult({ success: false, message: "Lütfen önce bir API anahtarı giriniz." });
+      return;
+    }
+    setIsAiTesting(true);
+    setAiTestResult(null);
+    try {
+      const res = await callGeminiAi(geminiApiKey, "Merhaba, sadece 'TAMAM' yaz.");
+      if (res) {
+        setAiTestResult({
+          success: true,
+          message: "✓ Tebrikler! Google Gemini API bağlantısı başarıyla kuruldu. Sistem aktif."
+        });
+      }
+    } catch (err: any) {
+      setAiTestResult({
+        success: false,
+        message: "❌ Bağlantı Başarısız: " + err.message
+      });
+    } finally {
+      setIsAiTesting(false);
+    }
+  };
 
   // Sayfa yüklendiğinde kayıtlı API anahtarını al
   useEffect(() => {
@@ -619,47 +647,88 @@ export default function TurOlusturucu() {
   // =========================================================================
   // MOD B: GOOGLE GEMINI YAPAY ZEKA MOTORU (OPSİYONEL & KESİNTİ GÜVENCELİ)
   // =========================================================================
+  // GOOGLE GEMINI DİNAMİK MODEL ÇAĞIRICI
   const callGeminiAi = async (apiKey: string, prompt: string): Promise<string> => {
     const cleanKey = apiKey.trim();
-    // Farklı hesap ve bölgelerde desteklenen Gemini modellerini sırayla dene
-    const endpoints = [
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${cleanKey}`,
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${cleanKey}`,
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cleanKey}`,
-      `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${cleanKey}`,
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent?key=${cleanKey}`,
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${cleanKey}`
-    ];
+    if (!cleanKey) throw new Error("Lütfen bir Google Gemini API anahtarı giriniz.");
 
-    let lastErrorMsg = "";
+    // 1. ADIM: Google ListModels servisinden bu anahtarın yetkili olduğu modelleri çek
+    let selectedModel = "";
+    try {
+      const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`);
+      if (listRes.ok) {
+        const listData = await listRes.json();
+        const models: any[] = listData.models || [];
+        const supported = models.filter((m) =>
+          Array.isArray(m.supportedGenerationMethods) &&
+          m.supportedGenerationMethods.includes("generateContent")
+        );
+        // Öncelik sıralaması: flash > 2.0 > gemini > herhangi bir desteklenen model
+        const best =
+          supported.find((m) => m.name.includes("flash")) ||
+          supported.find((m) => m.name.includes("gemini-2")) ||
+          supported.find((m) => m.name.includes("gemini")) ||
+          supported[0];
 
-    for (const url of endpoints) {
-      try {
-        const response = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0.1,
-            },
-          }),
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (text) return text;
-        } else {
-          const errData = await response.json().catch(() => ({}));
-          lastErrorMsg = errData.error?.message || response.statusText;
+        if (best && best.name) {
+          selectedModel = best.name.replace(/^models\//, "");
         }
-      } catch (e: any) {
-        lastErrorMsg = e.message;
+      } else {
+        const errJson = await listRes.json().catch(() => ({}));
+        if (errJson.error?.message) {
+          throw new Error(errJson.error.message);
+        }
+      }
+    } catch (e: any) {
+      if (e.message && !e.message.includes("fetch")) {
+        throw new Error(e.message);
       }
     }
 
-    throw new Error(lastErrorMsg || "Gemini modeline bağlanılamadı.");
+    // 2. ADIM: Seçilen veya aday modelleri sırayla dene
+    const candidateModels = selectedModel
+      ? [selectedModel, "gemini-1.5-flash-latest", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-pro"]
+      : ["gemini-1.5-flash-latest", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-pro"];
+
+    let lastErrorMsg = "";
+
+    for (const model of candidateModels) {
+      const urls = [
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`,
+        `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${cleanKey}`
+      ];
+
+      for (const url of urls) {
+        try {
+          const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature: 0.1,
+              },
+            }),
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (text) return text;
+          } else {
+            const errData = await response.json().catch(() => ({}));
+            lastErrorMsg = errData.error?.message || response.statusText;
+          }
+        } catch (e: any) {
+          lastErrorMsg = e.message;
+        }
+      }
+    }
+
+    throw new Error(
+      lastErrorMsg ||
+      "API anahtarınız doğrulanamadı. Lütfen aistudio.google.com adresinden yeni bir 'Gemini API Key' oluşturup deneyiniz."
+    );
   };
 
   // METİN İÇERİSİNDE SEÇİLİ YAZIYI KALIN (BOLD) YAPMA / KALDIRMA
@@ -2495,20 +2564,47 @@ ${d.content}`;
                   <input
                     type="password"
                     value={geminiApiKey}
-                    onChange={(e) => saveApiKey(e.target.value)}
+                    onChange={(e) => {
+                      saveApiKey(e.target.value);
+                      setAiTestResult(null);
+                    }}
                     placeholder="AIzaSy..."
                     className="flex-1 border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:border-purple-500 font-mono"
                   />
+                  <button
+                    type="button"
+                    onClick={testAiKey}
+                    disabled={isAiTesting || !geminiApiKey.trim()}
+                    className="text-xs bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white px-3 py-2 rounded-xl font-bold cursor-pointer transition shadow-sm"
+                  >
+                    {isAiTesting ? "Test Ediliyor..." : "🔍 Test Et"}
+                  </button>
                   {geminiApiKey && (
                     <button
                       type="button"
-                      onClick={() => saveApiKey("")}
+                      onClick={() => {
+                        saveApiKey("");
+                        setAiTestResult(null);
+                      }}
                       className="text-xs text-red-600 hover:bg-red-50 px-2.5 py-1 rounded-lg border border-red-200 cursor-pointer font-semibold"
                     >
                       Sil
                     </button>
                   )}
                 </div>
+
+                {/* TEST SONUCU BİLDİRİMİ */}
+                {aiTestResult && (
+                  <div
+                    className={`p-3 rounded-xl text-xs font-semibold mt-2 ${
+                      aiTestResult.success
+                        ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                        : "bg-red-50 text-red-800 border border-red-200"
+                    }`}
+                  >
+                    {aiTestResult.message}
+                  </div>
+                )}
                 <p className="text-[11px] text-slate-400 mt-1">
                   💡 API anahtarı sadece kendi tarayıcınızda (localStorage) saklanır.{" "}
                   <a
