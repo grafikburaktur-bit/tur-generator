@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 
 const ICON_BASE_URL =
   "https://www.buraktur.com/AlbumMedia/ckUpload/images/icon/";
@@ -150,7 +150,7 @@ const STYLE_BLOCK = `<!-- PREMIUM FONT: OUTFIT -->
 }
 .bt-tourday .bt-meeting-card { border-left: none; }
 .bt-tourday .bt-tour-text p, .bt-tourday .bt-tour-container p, .bt-tourday .bt-tour-container li, .bt-tourday .bt-tour-container span { overflow-wrap: break-word !important; word-wrap: break-word !important; word-break: break-word !important; }
-.bt-tourday .bt-tour-text p { margin: 0 0 16px; font-size: 16px; color: #334155; line-height: 1.7; text-align: justify; }
+.bt-tourday .bt-tour-text p { margin: 0 0 16px; font-size: 16px; color: #334155; line-height: 1.7; text-align: justify !important; text-justify: inter-word !important; }
 .bt-tourday .bt-tour-text p:last-child { margin-bottom: 0; }
 .bt-tourday .bt-tour-text strong, .bt-tourday .bt-tour-text b { color: #0f172a; font-weight: 700; }
 
@@ -189,7 +189,7 @@ const STYLE_BLOCK = `<!-- PREMIUM FONT: OUTFIT -->
   .bt-tourday .bt-tour-header .bt-day-badge { font-size: 14px !important; text-align: left !important; align-self: center !important; }
   .bt-tourday .bt-tour-route { border-radius: 8px !important; padding: 6px 12px !important; background: #f1f5f9 !important; gap: 8px !important; text-align: left !important; justify-content: flex-start !important; height: auto !important; max-height: none !important; flex-wrap: wrap !important; }
   .bt-tourday .bt-tour-card { padding: 20px 14px !important; border-radius: 16px; margin-bottom: 12px !important; }
-  .bt-tourday .bt-tour-text p { text-align: left !important; font-size: 15px; }
+  .bt-tourday .bt-tour-text p { text-align: justify !important; text-justify: inter-word !important; font-size: 15px; }
   .bt-tourday .bt-tour-image { max-height: 300px; margin-bottom: 12px !important; }
 }
 </style>\n\n`;
@@ -261,6 +261,28 @@ export default function TurOlusturucu() {
 
   // ÖNEMLİ BİLGİLER
   const [importantTitle, setImportantTitle] = useState("Önemli Bilgiler ve Notlar");
+
+  // YAPAY ZEKA VE OTOMATİK KALINLAŞTIRMA DURUMLARI
+  const [geminiApiKey, setGeminiApiKey] = useState<string>("");
+  const [isAiModalOpen, setIsAiModalOpen] = useState(false);
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [autoBoldOnImport, setAutoBoldOnImport] = useState(true);
+
+  // Sayfa yüklendiğinde kayıtlı API anahtarını al
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const savedKey = localStorage.getItem("bt_gemini_key");
+      if (savedKey) setGeminiApiKey(savedKey);
+    }
+  }, []);
+
+  const saveApiKey = (key: string) => {
+    setGeminiApiKey(key);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("bt_gemini_key", key);
+    }
+  };
+
   const [importantNotes, setImportantNotes] = useState<string[]>(DEFAULT_IMPORTANT_NOTES);
 
   const [copiedTab, setCopiedTab] = useState<string | null>(null);
@@ -456,6 +478,167 @@ export default function TurOlusturucu() {
   // =========================================================================
   // AKILLI PDF / METİN PARSER (AYRIŞTIRICI) MOTORU
   // =========================================================================
+
+
+  // =========================================================================
+  // MOD A: YEREL AKILLI KALINLAŞTIRMA (INTERNETSIZ / SÖZLÜK TABANLI)
+  // =========================================================================
+  const autoBoldDayContent = (text: string, destinations: string[] = []): string => {
+    if (!text) return "";
+    let res = text;
+
+    // 1. Durak ve Şehir İsimleri
+    destinations.forEach((dest) => {
+      if (dest && dest.length > 2) {
+        try {
+          const reg = new RegExp(`(?<!<b>)(?<![a-zA-ZçğıöşüÇĞİÖŞÜ])(${dest})(?![a-zA-ZçğıöşüÇĞİÖŞÜ])(?!<\/b>)`, "gi");
+          res = res.replace(reg, "<b>$1</b>");
+        } catch (e) {}
+      }
+    });
+
+    // 2. Sefer Kodları (TK266, TK0252, vb.)
+    res = res.replace(/(?<!<b>)\b([A-Z]{2}\s*\d{3,4})\b(?!<\/b>)/g, "<b>$1</b>");
+
+    // 3. Saatler (01.30’da, 07.45, 18.05 vb.)
+    res = res.replace(/(?<!<b>)\b(\d{1,2}\.\d{2}(?:['’][a-zçğıöşü]+)?)\b(?!<\/b>)/gi, "<b>$1</b>");
+
+    // 4. Havalimanı / Terminal Kalıpları
+    res = res.replace(/(?<!<b>)\b([A-ZÇĞİÖŞÜ][a-zA-ZçğıöşüÇĞİÖŞÜ\s]+(?:Havalimanı(?:’?[a-zçğıöşü]+)?|Havaalanı(?:’?[a-zçğıöşü]+)?|Dış Hatlar Terminali))\b(?!<\/b>)/g, "<b>$1</b>");
+
+    // 5. Tarihi, Dini ve Kültürel Mekan Kalıpları
+    const placeSuffixes = [
+      "Türbe ve Külliyeleri(?:[’'][a-zçğıöşü]+)?",
+      "Türbe ve Külliyesi(?:[’'][a-zçğıöşü]+)?",
+      "Çeşmesi ve Türbesi(?:[’'][a-zçğıöşü]+)?",
+      "Türbesi(?:[’'][a-zçğıöşü]+)?",
+      "Camisi(?:[’'][a-zçğıöşü]+)?",
+      "Camii(?:[’'][a-zçğıöşü]+)?",
+      "Mescidi(?:[’'][a-zçğıöşü]+)?",
+      "Medresesi(?:[’'][a-zçğıöşü]+)?",
+      "Külliyesi(?:[’'][a-zçğıöşü]+)?",
+      "Minaresi(?:[’'][a-zçğıöşü]+)?",
+      "Kalesi(?:[’'][a-zçğıöşü]+)?",
+      "Kompleksi(?:[’'][a-zçğıöşü]+)?",
+      "Tapınağı(?:[’'][a-zçğıöşü]+)?",
+      "Mozolesi(?:[’'][a-zçğıöşü]+)?",
+      "Sarayı(?:[’'][a-zçğıöşü]+)?",
+      "Müzesi(?:[’'][a-zçğıöşü]+)?",
+      "Meydanı(?:[’'][a-zçğıöşü]+)?",
+      "Köprüsü(?:[’'][a-zçğıöşü]+)?",
+      "Tünelleri(?:[’'][a-zçğıöşü]+)?",
+      "Pazarı(?:[’'][a-zçğıöşü]+)?",
+      "Çarşısı(?:[’'][a-zçğıöşü]+)?",
+      "Hotel(?:\s+vb\.?)?",
+      "Oteli(?:\s+vb\.?)?"
+    ];
+
+    const suffixRegexStr = `([A-ZÇĞİÖŞÜ][a-zA-ZçğıöşüÇĞİÖŞÜ\\-’'\\(\\)\\.]*(?:\\s+[A-ZÇĞİÖŞÜ][a-zA-ZçğıöşüÇĞİÖŞÜ\\-’'\\(\\)\\.]*){0,6}\\s+(?:${placeSuffixes.join("|")}))`;
+    try {
+      const placeRegex = new RegExp(`(?<!<b>)${suffixRegexStr}(?!<\\/b>)`, "g");
+      res = res.replace(placeRegex, "<b>$1</b>");
+    } catch (e) {}
+
+    // 6. Sabit dünya mirası / özel mekan terimleri
+    const specialTerms = ["UNESCO Dünya Mirası", "Eski Mahalle", "Tren Sokağı", "Angkor Wat", "Lebi Havuz", "Check-in", "THY"];
+    specialTerms.forEach((term) => {
+      try {
+        const r = new RegExp(`(?<!<b>)(${term})(?!<\\/b>)`, "gi");
+        res = res.replace(r, "<b>$1</b>");
+      } catch (e) {}
+    });
+
+    // 7. Çift veya iç içe <b> taglerini temizle
+    res = res.replace(/<b>\s*<b>/gi, "<b>").replace(/<\/b>\s*<\/b>/gi, "</b>");
+    return res;
+  };
+
+  // HERO KARTI İÇİN 4-6 MADDE ÇIKARMA (HAVAYOLU KESİNLİKLE HARİÇ TUTULUR)
+  const extractHeroFeatures = (incList: string[], tourContent: string, tourTitle: string): string[] => {
+    const features: string[] = [];
+    const fullContext = (tourTitle + " " + tourContent + " " + incList.join(" ")).toLowerCase();
+
+    // 1. Ülke & Şehir Sayısı (örn: 4 Ülke & 4 Başkent)
+    const countryMatch = fullContext.match(/(\d+)\s*(?:ülke|başkent)/i);
+    if (countryMatch) {
+      features.push(`🏰 ${countryMatch[0].toUpperCase()}`);
+    }
+
+    // 2. Akşam Yemekleri Durumu
+    const dinnerItem = incList.find((it) => /akşam\s+yeme[gğ]i/i.test(it));
+    if (dinnerItem) {
+      const countMatch = dinnerItem.match(/(\d+)\s*akşam\s+yeme[gğ]i/i);
+      features.push(countMatch ? `🍱 ${countMatch[0]} Dahil` : "🍱 Akşam Yemekleri Dahil");
+    } else if (/akşam\s+yeme[gğ]i\s+dahil/i.test(fullContext)) {
+      features.push("🍱 Akşam Yemekleri Dahil");
+    }
+
+    // 3. Müze / Ören Yeri / Girişler
+    const museumItem = incList.find((it) => /müze|ören|kale|giriş\s+ücret/i.test(it));
+    if (museumItem) {
+      features.push("🎫 Tüm Kale ve Müze Girişleri Dahil");
+    } else if (/giriş\s+ücretleri\s+dahil/i.test(fullContext)) {
+      features.push("🎫 Tüm Giriş Ücretleri Dahil");
+    }
+
+    // 4. Konaklama Kalitesi
+    const hotelItem = incList.find((it) => /otel|konaklama|cruise/i.test(it));
+    if (hotelItem) {
+      if (/5\s*\*|5\s*yıldız/i.test(hotelItem)) {
+        features.push("🏨 5 Yıldızlı Otellerde Konaklama");
+      } else if (/cruise/i.test(hotelItem)) {
+        features.push("🚢 Cruise & Seçkin Oteller");
+      } else {
+        features.push("🏨 Seçkin Otellerde Konaklama");
+      }
+    }
+
+    // 5. Ekstra Tur Durumu
+    if (/ekstra\s+tur\s+(?:ücreti\s+)?yok|tüm\s+turlar\s+dahil/i.test(fullContext)) {
+      features.push("✅ Ekstra Tur Ödemesi Yok");
+    }
+
+    // 6. Rehberlik Hizmeti
+    const guideItem = incList.find((it) => /rehberlik/i.test(it));
+    if (guideItem) {
+      features.push("🧭 Profesyonel Türkçe Rehberlik");
+    }
+
+    // Ek Güvence / Yedek Maddeler
+    if (features.length < 4 && incList.some((it) => /sigorta/i.test(it))) {
+      features.push("🛡️ Kapsamlı Seyahat Sigortası Dahil");
+    }
+    if (features.length < 4 && incList.some((it) => /transfer/i.test(it))) {
+      features.push("🚐 Özel Klimalı Araçlarla Transfer");
+    }
+
+    // Kesinlikle havayolu (THY, uçak vb.) içermeyen temiz liste
+    return features.filter((f) => !/hava\s*yol|thy|uçak\s+bileti/i.test(f)).slice(0, 6);
+  };
+
+  // =========================================================================
+  // MOD B: GOOGLE GEMINI YAPAY ZEKA MOTORU (OPSİYONEL & KESİNTİ GÜVENCELİ)
+  // =========================================================================
+  const callGeminiAi = async (apiKey: string, prompt: string): Promise<string> => {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.1,
+        },
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error?.message || `API Hatası: ${response.statusText}`);
+    }
+    const data = await response.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    return text || "";
+  };
 
   // METİN İÇERİSİNDE SEÇİLİ YAZIYI KALIN (BOLD) YAPMA / KALDIRMA
   const toggleBoldSelection = (textareaId: string, dayId: number, currentVal: string) => {
@@ -688,11 +871,15 @@ export default function TurOlusturucu() {
       }
 
       // BAŞARIYLA UYGULA
+      // Hero maddelerini otomatik çıkar (Havayolu hariç tutularak!)
+      const autoFeatures = extractHeroFeatures(incItems, daysSection, detectedTitle);
+
       setHero({
         ...hero,
         title: detectedTitle,
         subtitle: detectedSubtitle,
         duration: `${parsedDays.length} Günlük Program`,
+        features: autoFeatures.length > 0 ? autoFeatures : hero.features,
       });
       setDays(parsedDays);
       if (incItems.length > 0) {
@@ -723,12 +910,56 @@ export default function TurOlusturucu() {
     }
   };
 
-  // PDF DOSYASINI OKUMA FONKSİYONU (BOLD YAZILARI <b> İLE YAKALAR!)
+  // WORD (.DOCX) VE PDF DOSYALARINI OKUMA FONKSİYONU
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
+    const isWord = file.name.endsWith(".docx") || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    const isPdf = file.type === "application/pdf" || file.name.endsWith(".pdf");
+
+    if (isWord) {
+      setIsPdfLoading(true);
+      try {
+        // Mammoth.js kütüphanesini yükle
+        // @ts-ignore
+        if (!window.mammoth) {
+          await new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = "mammoth.browser.min.js";
+            script.onload = resolve;
+            script.onerror = () => {
+              const cdnScript = document.createElement("script");
+              cdnScript.src = "https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.8.0/mammoth.browser.min.js";
+              cdnScript.onload = resolve;
+              cdnScript.onerror = reject;
+              document.head.appendChild(cdnScript);
+            };
+            document.head.appendChild(script);
+          });
+        }
+
+        const arrayBuffer = await file.arrayBuffer();
+        // @ts-ignore
+        const result = await window.mammoth.convertToHtml({ arrayBuffer });
+        const html = result.value;
+
+        // HTML etiketlerini bizim sisteme uyarla (strong/b -> <b>, p/div/li -> \n)
+        let str = html.replace(/<(?:strong|b)(?:\s+[^>]*)?>([\s\S]*?)<\/(?:strong|b)>/gi, "___B_START___$1___B_END___");
+        str = str.replace(/<span[^>]*style="[^"]*font-weight:\s*(?:bold|[6-9]00)[^"]*"[^>]*>([\s\S]*?)<\/span>/gi, "___B_START___$1___B_END___");
+        str = str.replace(/<br\s*\/?>/gi, "\n");
+        str = str.replace(/<\/(?:p|div|li|h[1-6]|tr)>/gi, "\n");
+        str = str.replace(/<[^>]+>/g, "");
+        str = str.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"");
+        str = str.replace(/___B_START___/g, "<b>").replace(/___B_END___/g, "</b>");
+        const clean = str.replace(/\n{3,}/g, "\n\n").trim();
+        setImportText(clean);
+      } catch (err: any) {
+        alert("Word dosyası okunamadı: " + err.message);
+      } finally {
+        setIsPdfLoading(false);
+      }
+    } else if (isPdf) {
       setIsPdfLoading(true);
       try {
         // PDF.js'i CDN üzerinden dinamik yükle
@@ -1278,6 +1509,100 @@ document.addEventListener('DOMContentLoaded', function () {
     setTimeout(() => setCopiedCardId(null), 2000);
   };
 
+
+  // TEK BİR GÜNÜ YAPAY ZEKA İLE KALINLAŞTIR
+  const handleAiBoldSingleDay = async (dayId: number, currentContent: string) => {
+    if (!geminiApiKey.trim()) {
+      setIsAiModalOpen(true);
+      return;
+    }
+    setIsAiLoading(true);
+    try {
+      const prompt = `Sen Burak Turizm'in profesyonel tur editörüsün. Aşağıdaki tur günü metnindeki tarihi mekanları, türbeleri, külliyeleri, camileri, tapınakları, sarayları, müzeleri, otelleri, uçuş/sefer kodlarını, saatleri ve şehirleri <b>...</b> etiketiyle kalınlaştır.
+ÖNEMLİ KURALLAR:
+1. Metnin kelimelerini, anlamını ASLA değiştirme veya ekleme yapma.
+2. Sadece kalınlaştırılması gereken yerlerin önüne <b> sonuna </b> ekle.
+3. SADECE güncellenmiş metni döndür, başka hiçbir açıklama yazma.
+
+Metin:
+${currentContent}`;
+
+      const aiResult = await callGeminiAi(geminiApiKey, prompt);
+      if (aiResult && aiResult.trim()) {
+        updateDay(dayId, "content", aiResult.trim());
+        setImportMessage("✓ Yapay zeka günü başarıyla analiz etti ve kalınlaştırdı.");
+        setTimeout(() => setImportMessage(null), 3000);
+      }
+    } catch (err: any) {
+      alert("Yapay zekaya ulaşılamadı: " + err.message + "\nYerel kural motoru devreye alınıyor.");
+      // Fallback to local auto-bold
+      const localResult = autoBoldDayContent(currentContent, [hero.title, hero.subtitle]);
+      updateDay(dayId, "content", localResult);
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  // TÜM TURU YAPAY ZEKA İLE ANALİZ ET & ZENGİNLEŞTİR (HERO MADDELERİ + BOLDLAR)
+  const handleAiEnrichEntireTour = async () => {
+    if (!geminiApiKey.trim()) {
+      setIsAiModalOpen(true);
+      return;
+    }
+    setIsAiLoading(true);
+    try {
+      // 1. Hero maddelerini AI ile çıkar (Havayolu hariç!)
+      const heroPrompt = `Aşağıdaki tur başlığı ve dahil olan hizmetler listesine bakarak, Burak Turizm tur üst kartı için en can alıcı 4-6 kısa özellik maddesi üret.
+KURALLAR:
+1. KESİNLİKLE havayolu (THY ile, uçak vb.) EKLEME.
+2. Akşam yemekleri (örn: 🍱 8 Akşam Yemeği Dahil), konaklama (örn: 🏨 5* Oteller & Cruise), girişler (örn: 🎫 Tüm Müze Girişleri Dahil), ekstra tur şartı (örn: ✅ Ekstra Tur Ödemesi Yok), ülke sayısı (örn: 🏰 4 Ülke & 4 Başkent), rehberlik (örn: 🧭 Profesyonel Türkçe Rehberlik) gibi konuları ele al.
+3. Her maddenin başına uygun tek bir emoji koy.
+4. SADECE geçerli bir JSON string dizisi döndür (Örnek: ["🍱 8 Akşam Yemeği Dahil", "🏨 5 Yıldızlı Oteller"]). Başka hiçbir açıklama yazma.
+
+Tur Başlığı: ${hero.title}
+Dahil Olanlar:
+${includedServices.join("\n")}`;
+
+      const heroAiRes = await callGeminiAi(geminiApiKey, heroPrompt);
+      try {
+        const jsonMatch = heroAiRes.match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            // Havayolu içermeyenleri al
+            const cleanFeatures = parsed.filter((f: string) => !/hava\s*yol|thy|uçak/i.test(f)).slice(0, 6);
+            if (cleanFeatures.length > 0) {
+              setHero((prev) => ({ ...prev, features: cleanFeatures }));
+            }
+          }
+        }
+      } catch (e) {}
+
+      // 2. Günlerdeki açıklamaları AI ile kalınlaştır
+      const updatedDays = await Promise.all(
+        days.map(async (d) => {
+          try {
+            const dayPrompt = `Aşağıdaki tur metnindeki tarihi ve dini mekanları (türbeler, külliyeler, camiler, medreseler, tapınaklar, saraylar, müzeler, oteller vb.), uçuşları ve saatleri <b>...</b> etiketi ile kalınlaştır. Kelimeleri değiştirme. Sadece metni döndür.
+Metin:
+${d.content}`;
+            const bolded = await callGeminiAi(geminiApiKey, dayPrompt);
+            return { ...d, content: bolded.trim() || d.content };
+          } catch (e) {
+            return d;
+          }
+        })
+      );
+      setDays(updatedDays);
+      setImportMessage("✨ Harika! Tüm tur programı ve Hero maddeleri Yapay Zeka ile başarıyla zenginleştirildi.");
+      setTimeout(() => setImportMessage(null), 5000);
+      setIsAiModalOpen(false);
+    } catch (err: any) {
+      alert("Yapay zeka analizinde hata oluştu: " + err.message);
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
   // SADECE HERO KARTINI KOPYALA
   const copyHeroCard = () => {
     const html = generateHeroOnlyHTML(false);
@@ -1675,14 +2000,39 @@ document.addEventListener('DOMContentLoaded', function () {
                           <label className="block text-xs font-semibold text-slate-600">
                             Açıklama Metni (Kalın yerler &lt;b&gt;...&lt;/b&gt; olarak saklanır)
                           </label>
-                          <button
-                            type="button"
-                            onClick={() => toggleBoldSelection(`day-content-${day.id}`, day.id, day.content)}
-                            title="Seçili metni kalın yapar veya kaldırır (Kısayol: Ctrl+B / Cmd+B)"
-                            className="inline-flex items-center gap-1 text-[11px] font-bold bg-slate-100 hover:bg-sky-50 hover:text-sky-600 text-slate-700 px-2 py-0.5 rounded border border-slate-200 transition shadow-sm"
-                          >
-                            <span className="font-extrabold text-xs">B</span> Seçiliyi Kalın Yap
-                          </button>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => toggleBoldSelection(`day-content-${day.id}`, day.id, day.content)}
+                              title="Seçili metni kalın yapar veya kaldırır (Kısayol: Ctrl+B / Cmd+B)"
+                              className="inline-flex items-center gap-1 text-[11px] font-bold bg-slate-100 hover:bg-sky-50 hover:text-sky-600 text-slate-700 px-2 py-0.5 rounded border border-slate-200 transition shadow-sm cursor-pointer"
+                            >
+                              <span className="font-extrabold text-xs">B</span> Seçiliyi Kalın Yap
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const stops = day.routes.map(r => r.location);
+                                const bolded = autoBoldDayContent(day.content, stops);
+                                updateDay(day.id, "content", bolded);
+                              }}
+                              title="Yerel kural motoruyla tarihi yerleri, saatleri ve otelleri otomatik kalınlaştırır"
+                              className="inline-flex items-center gap-1 text-[11px] font-semibold bg-amber-50 hover:bg-amber-100 text-amber-800 px-2 py-0.5 rounded border border-amber-200 transition shadow-sm cursor-pointer"
+                            >
+                              <span>🪄</span> Oto-Kalınlaştır
+                            </button>
+                            {geminiApiKey && (
+                              <button
+                                type="button"
+                                onClick={() => handleAiBoldSingleDay(day.id, day.content)}
+                                disabled={isAiLoading}
+                                title="Google Gemini yapay zekasıyla karmaşık yerleri ve dini mekanları insan gibi kalınlaştırır"
+                                className="inline-flex items-center gap-1 text-[11px] font-semibold bg-purple-50 hover:bg-purple-100 text-purple-700 px-2 py-0.5 rounded border border-purple-200 transition shadow-sm cursor-pointer"
+                              >
+                                <span>✨</span> AI
+                              </button>
+                            )}
+                          </div>
                         </div>
                         <textarea
                           id={`day-content-${day.id}`}
@@ -2066,6 +2416,115 @@ document.addEventListener('DOMContentLoaded', function () {
       </div>
 
       {/* ========================================================================= */}
+      
+      {/* ========================================================================= */}
+      {/* YAPAY ZEKA AYARLARI VE ZENGİNLEŞTİRME MODALI */}
+      {/* ========================================================================= */}
+      {isAiModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-6 md:p-8 space-y-5 border border-slate-200">
+            <div className="flex justify-between items-start border-b border-slate-100 pb-4">
+              <div>
+                <h3 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
+                  <span>✨</span> Google Gemini Yapay Zeka
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Karmaşık türbe, külliye, tapınak isimlerini kusursuz kalınlaştırmak ve Hero maddelerini özetlemek için Google Gemini kullanılır.
+                </p>
+              </div>
+              <button
+                onClick={() => setIsAiModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 text-2xl font-bold p-1 cursor-pointer transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="bg-amber-50 p-3.5 rounded-xl border border-amber-200 text-xs text-amber-900 space-y-1">
+                <p className="font-bold flex items-center gap-1.5">
+                  <span>🛡️</span> %100 Kesinti Güvenceli (Hibrit Çalışma):
+                </p>
+                <p className="text-[11px] text-amber-800 leading-relaxed">
+                  Yapay zeka olmasa bile sistem yerel kural motoruyla çalışmaya devam eder. AI, insan gibi karmaşık cümleleri anlamak için opsiyonel bir hızlandırıcıdır.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Google Gemini API Key (Ücretsizdir)
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={geminiApiKey}
+                    onChange={(e) => saveApiKey(e.target.value)}
+                    placeholder="AIzaSy..."
+                    className="flex-1 border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:border-purple-500 font-mono"
+                  />
+                  {geminiApiKey && (
+                    <button
+                      type="button"
+                      onClick={() => saveApiKey("")}
+                      className="text-xs text-red-600 hover:bg-red-50 px-2.5 py-1 rounded-lg border border-red-200 cursor-pointer font-semibold"
+                    >
+                      Sil
+                    </button>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  💡 API anahtarı sadece kendi tarayıcınızda (localStorage) saklanır.{" "}
+                  <a
+                    href="https://aistudio.google.com/app/apikey"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-purple-600 underline font-bold"
+                  >
+                    Buradan 1 saniyede ücretsiz alabilirsiniz ↗
+                  </a>
+                </p>
+              </div>
+
+              {geminiApiKey && (
+                <div className="p-4 bg-purple-50 rounded-2xl border border-purple-100 space-y-3">
+                  <h4 className="text-xs font-bold text-purple-900">
+                    Sihirli İşlemler:
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={handleAiEnrichEntireTour}
+                    disabled={isAiLoading}
+                    className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-bold text-sm py-2.5 px-4 rounded-xl shadow-md flex items-center justify-center gap-2 cursor-pointer transition-all disabled:opacity-50"
+                  >
+                    {isAiLoading ? (
+                      <span>⏳ Yapay Zeka Analiz Ediyor...</span>
+                    ) : (
+                      <>
+                        <span>🚀</span>
+                        <span>Tüm Turu Yapay Zeka ile Zenginleştir</span>
+                      </>
+                    )}
+                  </button>
+                  <p className="text-[10.5px] text-purple-700 text-center">
+                    Tüm günlerdeki türbe/cami/otelleri kalınlaştırır ve Hero kartı için 5 can alıcı maddeyi (havayolu hariç) üretir.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setIsAiModalOpen(false)}
+                className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs px-4 py-2 rounded-xl cursor-pointer transition"
+              >
+                Kapat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* AKILLI PDF / METİN OTOMATİK DOLDURMA MODALI */}
       {/* ========================================================================= */}
       {isImportModalOpen && (
@@ -2075,7 +2534,7 @@ document.addEventListener('DOMContentLoaded', function () {
             <div className="flex justify-between items-start border-b border-slate-100 pb-4">
               <div>
                 <h3 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
-                  <span>✨</span> PDF veya Metinden Otomatik Doldur
+                  <span>📄</span> Word (.docx), PDF veya Metinden Doldur
                 </h3>
                 <p className="text-xs text-slate-500 mt-1">
                   Tur programı PDF dosyasını yükleyin veya metnini yapıştırın; başlık, günler, duraklar, kalın yazılar ve dahil/hariç hizmetler otomatik ayrılsın.
