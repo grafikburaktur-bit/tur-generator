@@ -720,26 +720,29 @@ export default function TurOlusturucu() {
       features.push("🧭 Profesyonel Türkçe Rehberlik");
     }
 
-    // Kesinlikle havayolu (THY, uçak vb.) içermeyen temiz filtreleme
-    let clean = features.filter((f) => !/hava\s*yol|thy|uçak\s+bileti/i.test(f));
+    // Kesinlikle havayolu (THY, uçak vb.) ve mükerrer marka içermeyen temiz filtreleme
+    let clean = features.filter((f) => !/hava\s*yol|thy|uçak\s+bileti|burak\s*tur/i.test(f));
 
-    // TAM 6 MADDE GARANTİSİ (Hero kartı 2x3 veya 3x2 simetrik ve dolu görünsün)
+    // 5 MADDE TAMAMLAYICI (6. madde HTML şablonunda '💎 Burak Tur Kalitesiyle' olarak sabit bulunur)
     const fallbackBadges = [
       "🚐 Tüm Şehirlerarası & Havalimanı Transferleri",
       "🛡️ Kapsamlı Seyahat Sigortası Dahil",
       "🧭 Profesyonel Türkçe Rehberlik Hizmeti",
-      "💎 Burak Turizm Kalitesi ve Güvencesi"
+      "✅ Ekstra Tur Ödemesi Yok",
+      "🎫 Tüm Kale ve Müze Girişleri Dahil",
+      "🍱 Akşam Yemekleri Dahil"
     ];
 
     for (const badge of fallbackBadges) {
-      if (clean.length >= 6) break;
-      const alreadyHas = clean.some(c => c.toLowerCase().includes(badge.slice(3, 10).toLowerCase()));
+      if (clean.length >= 5) break;
+      const keyWord = badge.slice(3, 10).toLowerCase();
+      const alreadyHas = clean.some(c => c.toLowerCase().includes(keyWord));
       if (!alreadyHas) {
         clean.push(badge);
       }
     }
 
-    return clean.slice(0, 6);
+    return clean.slice(0, 5);
   };
 
   // =========================================================================
@@ -975,22 +978,23 @@ export default function TurOlusturucu() {
           detectedSubtitle = subtitleParts
             .join(", ")
             .replace(/<[^>]+>/g, "")
+            .replace(/\s*[\u2013\u2014\-–—]+\s*/g, ", ")
+            .replace(/,\s*,/g, ", ")
             .replace(/\s{2,}/g, " ")
-            .replace(/,\s*,/g, ",")
             .trim();
         }
       }
 
-      // 3. GÜNLERİ AYRIŞTIR (Bold taglerini ve farklı formatları kusursuz yakalama)
-      const dayRegex = /(?:^|\n)(?:<b[^>]*>)?\s*(?:(\d+)\.\s*G[üu]n|Bulu[şs]ma)(?:[^\n:]*?)?[:\-–—]\s*([^\n]+)/gi;
+      // 3. GÜNLERİ AYRIŞTIR (Bold taglerini, <br> ve farklı formatları kusursuz yakalama)
+      const dayRegex = /(?:^|\n|\r|<br\s*\/?>|<\/p>|<\/div>)\s*(?:<[^>]+>\s*)*(?:(\d+)\s*\.\s*(?:<[^>]+>\s*)*G[üu]n|G[üu]n\s*(?:<[^>]+>\s*)*(\d+)|Bulu[şs]ma)(?:<[^>]+>|[^\n\r:<])*?[:\-–—]\s*([^\n\r<]+)/gi;
       const matches: { full: string; dayNum?: string; routeStr: string; index: number; length: number }[] = [];
       let match;
 
       while ((match = dayRegex.exec(daysSection)) !== null) {
         matches.push({
           full: match[0],
-          dayNum: match[1],
-          routeStr: match[2].replace(/<[^>]+>/g, '').trim(),
+          dayNum: match[1] || match[2] || (match[0].toLowerCase().includes("bulu") ? "" : ""),
+          routeStr: match[3].replace(/<[^>]+>/g, '').trim(),
           index: match.index,
           length: match[0].length,
         });
@@ -1081,12 +1085,50 @@ export default function TurOlusturucu() {
       // Hero maddelerini otomatik çıkar (Havayolu hariç tutularak!)
       const autoFeatures = extractHeroFeatures(incItems, daysSection, detectedTitle);
 
+      // Gece ve Gün Sayısını Doğru Hesapla (örn: 8 Gece / 9 Gün)
+      const dayCount = parsedDays.filter((d) => d.type === "day").length || parsedDays.length;
+      const fullSearchText = (daysSection + " " + incItems.join(" ")).toLowerCase();
+      const nightMatch = fullSearchText.match(/(\d+)\s*gece/i);
+      let nightCount = dayCount > 1 ? dayCount - 1 : 1;
+      if (nightMatch && parseInt(nightMatch[1], 10) > 0 && parseInt(nightMatch[1], 10) <= dayCount) {
+        nightCount = parseInt(nightMatch[1], 10);
+      }
+      const calculatedDuration = `${nightCount} Gece / ${dayCount} Gün`;
+
+      // Alt Başlıktaki Çizgileri Virgüle Çevir
+      const cleanSubtitle = detectedSubtitle
+        .replace(/\s*[\u2013\u2014\-–—]+\s*/g, ", ")
+        .replace(/,\s*,/g, ", ")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+
+      // Footer Metnini ve URL'ini Tur Başlığından Dinamik Üret
+      let autoFooterText = hero.footerText;
+      let autoFooterUrl = hero.footerUrl;
+      if (detectedTitle) {
+        let region = detectedTitle
+          .replace(/\b(?:BÜYÜK|KLASİK|ÖZEL|EKSPRES|TURU|GEZİSİ|PROGRAMI)\b/gi, "")
+          .replace(/[,&]/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (region) {
+          const formattedRegion = region.charAt(0).toLocaleUpperCase("tr-TR") + region.slice(1).toLocaleLowerCase("tr-TR");
+          autoFooterText = `Tüm ${formattedRegion} Turları İçin Tıklayınız`;
+          const slug = formattedRegion.toLowerCase()
+            .replace(/ı/g, 'i').replace(/ğ/g, 'g').replace(/ü/g, 'u').replace(/ş/g, 's').replace(/ö/g, 'o').replace(/ç/g, 'c')
+            .replace(/[^a-z0-9]+/g, "-");
+          autoFooterUrl = `https://www.buraktur.com/tur/${slug}-turlari`;
+        }
+      }
+
       setHero({
         ...hero,
         title: detectedTitle,
-        subtitle: detectedSubtitle,
-        duration: `${parsedDays.length} Günlük Program`,
+        subtitle: cleanSubtitle,
+        duration: calculatedDuration,
         features: autoFeatures.length > 0 ? autoFeatures : hero.features,
+        footerText: autoFooterText,
+        footerUrl: autoFooterUrl,
       });
       setDays(parsedDays);
       if (incItems.length > 0) {
@@ -1781,13 +1823,14 @@ ${currentContent}`;
     setIsAiLoading(true);
     try {
       // 1. Hero maddelerini AI ile çıkar (Havayolu hariç!)
-      const heroPrompt = `Aşağıdaki tur başlığı ve dahil olan hizmetler listesine bakarak, Burak Turizm tur üst kartı için TAM OLARAK 6 ADET can alıcı kısa özellik maddesi üret.
+      const heroPrompt = `Aşağıdaki tur başlığı ve dahil olan hizmetler listesine bakarak, Burak Turizm tur üst kartı için TAM OLARAK 5 ADET can alıcı kısa özellik maddesi üret.
 KURALLAR:
 1. KESİNLİKLE havayolu (THY ile, uçak vb.) EKLEME.
-2. TAM 6 MADDE OLMALIDIR (Eksik veya fazla olmamalı).
-3. Akşam yemekleri (örn: 🍱 8 Akşam Yemeği Dahil), konaklama (örn: 🏨 4* & 5* Oteller), girişler (örn: 🎫 Tüm Müze ve Ören Yeri Girişleri Dahil), ekstra tur şartı (örn: ✅ Ekstra Tur Ödemesi Yok), rehberlik (örn: 🧭 Profesyonel Türkçe Rehberlik), transferler (örn: 🚐 Tüm Transferler Dahil), tur güvencesi gibi konuları ele al.
-4. Her maddenin başına uygun tek bir emoji koy.
-5. SADECE geçerli bir JSON string dizisi döndür (Örnek: ["🏨 4* ve 5* Otellerde Konaklama", "🍱 8 Akşam Yemeği Dahil", "🎫 Tüm Müze Girişleri Dahil", "🧭 Profesyonel Türkçe Rehberlik", "🚐 Tüm Transferler Dahil", "✅ Ekstra Tur Ödemesi Yok"]). Başka hiçbir açıklama yazma.
+2. KESİNLİKLE 'Burak Tur Kalitesi' vb. EKLEME (Bu madde 6. sıraya sistem tarafından otomatik eklenecektir).
+3. TAM 5 MADDE OLMALIDIR (Eksik veya fazla olmamalı).
+4. Akşam yemekleri (örn: 🍱 8 Akşam Yemeği Dahil), konaklama (örn: 🏨 4* & 5* Oteller), girişler (örn: 🎫 Tüm Müze ve Ören Yeri Girişleri Dahil), ekstra tur şartı (örn: ✅ Ekstra Tur Ödemesi Yok), rehberlik (örn: 🧭 Profesyonel Türkçe Rehberlik), transferler (örn: 🚐 Tüm Transferler Dahil) gibi konuları ele al.
+5. Her maddenin başına uygun tek bir emoji koy.
+6. SADECE geçerli bir JSON string dizisi döndür (Örnek: ["🏨 4* ve 5* Otellerde Konaklama", "🍱 8 Akşam Yemeği Dahil", "🎫 Tüm Müze Girişleri Dahil", "🧭 Profesyonel Türkçe Rehberlik", "🚐 Tüm Transferler Dahil"]). Başka hiçbir açıklama yazma.
 
 Tur Başlığı: ${hero.title}
 Dahil Olanlar:
@@ -1800,19 +1843,20 @@ ${includedServices.join("\n")}`;
           const parsed = JSON.parse(jsonMatch[0]);
           if (Array.isArray(parsed) && parsed.length > 0) {
             // Havayolu içermeyenleri al
-            let cleanFeatures = parsed.filter((f: string) => !/hava\s*yol|thy|uçak/i.test(f));
+            let cleanFeatures = parsed.filter((f: string) => !/hava\s*yol|thy|uçak|burak\s*tur/i.test(f));
             const fallbacks = [
               "🚐 Tüm Transferler Dahil",
               "🛡️ Kapsamlı Seyahat Sigortası Dahil",
               "🧭 Profesyonel Türkçe Rehberlik",
-              "💎 Burak Turizm Kalitesiyle"
+              "✅ Ekstra Tur Ödemesi Yok",
+              "🎫 Tüm Müze Girişleri Dahil"
             ];
             for (const fb of fallbacks) {
-              if (cleanFeatures.length >= 6) break;
+              if (cleanFeatures.length >= 5) break;
               if (!cleanFeatures.includes(fb)) cleanFeatures.push(fb);
             }
             if (cleanFeatures.length > 0) {
-              setHero((prev) => ({ ...prev, features: cleanFeatures.slice(0, 6) }));
+              setHero((prev) => ({ ...prev, features: cleanFeatures.slice(0, 5) }));
             }
           }
         }
