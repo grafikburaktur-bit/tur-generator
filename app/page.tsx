@@ -615,7 +615,8 @@ export default function TurOlusturucu() {
   // =========================================================================
   const autoBoldDayContent = (text: string, destinations: string[] = []): string => {
     if (!text) return "";
-    let res = text;
+    // Non-breaking space ve özel boşluk karakterlerini normalize et
+    let res = text.replace(/\u00a0/g, " ");
 
     // 1. Durak ve Şehir İsimleri
     destinations.forEach((dest) => {
@@ -628,13 +629,13 @@ export default function TurOlusturucu() {
     });
 
     // 2. Sefer Kodları (TK179, TK8, TK266, PC123 vb. - 1 ila 4 basamaklı)
-    res = res.replace(/(?<!<b>)\b([A-Z]{2}\s*\d{1,4})\b(?!<\/b>)/g, "<b>$1</b>");
+    res = res.replace(/(?<!<b>)\b([A-Z]{2}\s*\d{1,4}(?:\s*nolu\s*uçuş(?:u)?)?)\b(?!<\/b>)/gi, "<b>$1</b>");
 
     // 2.1 Uçuş Süreleri: (13sa 40dk), (4sa 15dk), (5sa 30dk) vb.
     res = res.replace(/(?<!<b>)(\(\s*\d+\s*sa(?:at)?(?:\s*\d+\s*dk(?:ika)?)?\s*\))(?!<\/b>)/gi, "<b>$1</b>");
 
-    // 3. Saatler (05.10’da, 21.45’te, 15.00, 08:30, 23.59'te vb.)
-    res = res.replace(/(?<!<b>)\b(\d{1,2}[.:]\d{2}(?:[’'][a-zçğıöşü]+)?)(?!<\/b>)/gi, "<b>$1</b>");
+    // 3. Saatler ("saat 08.10'da", "05.10'da", "21.45'te", "15.00", "08:30", "23.59'te" vb.)
+    res = res.replace(/(?<!<b>)\b((?:saat\s+)?\d{1,2}[.:]\d{2}(?:[’'][a-zçğıöşü]+)?)(?!<\/b>)/gi, "<b>$1</b>");
 
     // 4. Havalimanı / Terminal Kalıpları
     res = res.replace(/(?<!<b>)\b([A-ZÇĞİÖŞÜ][a-zA-ZçğıöşüÇĞİÖŞÜ\s]+(?:Havalimanı(?:’?[a-zçğıöşü]+)?|Havaalanı(?:’?[a-zçğıöşü]+)?|Dış Hatlar Terminali))\b(?!<\/b>)/g, "<b>$1</b>");
@@ -883,7 +884,8 @@ export default function TurOlusturucu() {
       return autoBoldDayContent(originalText, destinations);
     }
 
-    return cleaned;
+    // AI çıktısının üzerinden yerel motoru da geçirerek atlanmış olabilecek TÜM SAAT, SEFER VE SÜRELERİ garantiye al!
+    return autoBoldDayContent(cleaned, destinations);
   };
 
   // METİN İÇERİSİNDE SEÇİLİ YAZIYI KALIN (BOLD) YAPMA / KALDIRMA
