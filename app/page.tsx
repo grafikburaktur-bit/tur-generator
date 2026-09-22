@@ -288,6 +288,41 @@ export default function TurOlusturucu() {
     }
   };
 
+  // GOOGLE GEMINI KULLANILABİLİR MODELLERİ DİNAMİK ÇEKME
+  const fetchAvailableModels = async (apiKey: string): Promise<string[]> => {
+    try {
+      const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+      if (listRes.ok) {
+        const listData = await listRes.json();
+        const models: any[] = listData.models || [];
+        const supported = models
+          .filter((m: any) =>
+            Array.isArray(m.supportedGenerationMethods) &&
+            m.supportedGenerationMethods.includes("generateContent")
+          )
+          .map((m: any) => m.name.replace(/^models\//, ""));
+
+        if (supported.length > 0) {
+          // Öncelik: flash modeller > 2.0 > 1.5 > diğerleri
+          return supported.sort((a, b) => {
+            const getScore = (name: string) => {
+              let score = 0;
+              if (name.includes("flash")) score += 10;
+              if (name.includes("2.0") || name.includes("2.5")) score += 5;
+              if (name.includes("1.5")) score += 3;
+              if (name.includes("preview") || name.includes("exp")) score -= 2;
+              return score;
+            };
+            return getScore(b) - getScore(a);
+          });
+        }
+      }
+    } catch (e) {
+      console.warn("fetchAvailableModels hatası:", e);
+    }
+    return [];
+  };
+
   // API ANAHTARINI TEST ETME FONKSİYONU (KESİNTİSİZ & ÇOKLU MODEL YEDEKLİ)
   const testAiKey = async () => {
     const cleanKey = geminiApiKey.trim();
@@ -299,68 +334,58 @@ export default function TurOlusturucu() {
     setAiTestResult(null);
 
     try {
-      // 1. En kararlı ve kotası en yüksek temel modeller
-      let candidateNames = [
-        "gemini-1.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash-latest",
-        "gemini-1.5-pro",
-        "gemini-2.0-flash-exp"
-      ];
+      // 1. Google ListModels'tan bu anahtarın gerçek modellerini dinamik çek
+      let dynamicModels = await fetchAvailableModels(cleanKey);
 
-      // 2. Google ListModels sorgula ve desteklenen modelleri listeye ekle
-      try {
-        const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`);
-        if (listRes.ok) {
-          const listData = await listRes.json();
-          const models: any[] = listData.models || [];
-          const supported = models
-            .filter((m: any) =>
-              Array.isArray(m.supportedGenerationMethods) &&
-              m.supportedGenerationMethods.includes("generateContent")
-            )
-            .map((m: any) => m.name.replace(/^models\//, ""))
-            // Kararsız/deneysel/kullanım dışı uç modelleri filtrele
-            .filter((name: string) => !name.includes("preview") && !name.includes("medium") && !name.includes("2.5"));
-
-          // Standart modelleri öncelikli tutarak birleştir
-          candidateNames = Array.from(new Set([...candidateNames, ...supported]));
-        }
-      } catch (listErr) {
-        console.warn("ListModels alınamadı, standart modeller denenecek:", listErr);
-      }
-
-      // Kullanıcının kayıtlı modeli varsa en başa al
-      if (activeAiModel && candidateNames.includes(activeAiModel)) {
-        candidateNames = [activeAiModel, ...candidateNames.filter((m) => m !== activeAiModel)];
-      }
+      // 2. Aday modeller listesi oluştur (Dinamik modeller öncelikli!)
+      let candidateNames = Array.from(
+        new Set([
+          ...(activeAiModel ? [activeAiModel] : []),
+          ...dynamicModels,
+          "gemini-1.5-flash",
+          "gemini-2.0-flash",
+          "gemini-1.5-flash-latest",
+          "gemini-1.5-pro",
+          "gemini-2.5-flash",
+          "gemini-2.0-flash-exp"
+        ].filter(Boolean))
+      );
 
       let workingModel = "";
       let errorLog: string[] = [];
 
-      // Modelleri sırayla test et, İLK ÇALIŞAN modeli onayla!
+      // Modelleri sırayla dene, ilk çalışanı yakala!
       for (const modelName of candidateNames) {
-        try {
-          const genUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${cleanKey}`;
-          const genRes = await fetch(genUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: "ping" }] }],
-            }),
-          });
+        const endpoints = [
+          `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${cleanKey}`,
+          `https://generativelanguage.googleapis.com/v1/models/${modelName}:generateContent?key=${cleanKey}`
+        ];
 
-          if (genRes.ok) {
-            workingModel = modelName;
-            break; // Başarılı!
-          } else {
-            const errData = await genRes.json().catch(() => ({}));
-            const msg = errData.error?.message || `HTTP ${genRes.status}`;
-            errorLog.push(`${modelName}: ${msg}`);
+        let modelSuccess = false;
+        for (const url of endpoints) {
+          try {
+            const genRes = await fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: "ping" }] }],
+              }),
+            });
+
+            if (genRes.ok) {
+              workingModel = modelName;
+              modelSuccess = true;
+              break;
+            } else {
+              const errData = await genRes.json().catch(() => ({}));
+              errorLog.push(`${modelName}: ${errData.error?.message || genRes.statusText}`);
+            }
+          } catch (e: any) {
+            errorLog.push(`${modelName}: ${e.message}`);
           }
-        } catch (e: any) {
-          errorLog.push(`${modelName}: ${e.message}`);
         }
+
+        if (modelSuccess) break;
       }
 
       if (!workingModel) {
@@ -753,13 +778,18 @@ export default function TurOlusturucu() {
     const cleanKey = apiKey.trim();
     if (!cleanKey) throw new Error("Lütfen bir Google Gemini API anahtarı giriniz.");
 
+    // Dinamik modelleri çek
+    let dynamicModels = await fetchAvailableModels(cleanKey);
+
     const candidateModels = Array.from(
       new Set([
-        activeAiModel,
+        ...(activeAiModel ? [activeAiModel] : []),
+        ...dynamicModels,
         "gemini-1.5-flash",
         "gemini-2.0-flash",
         "gemini-1.5-flash-latest",
         "gemini-1.5-pro",
+        "gemini-2.5-flash",
         "gemini-2.0-flash-exp"
       ].filter(Boolean))
     );
@@ -767,50 +797,53 @@ export default function TurOlusturucu() {
     let lastError = "";
 
     for (const model of candidateModels) {
-      try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`;
-        const response = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            systemInstruction: {
-              parts: [{
-                text: "Sen Burak Turizm için sadece HTML biçimlendirme yapan bir asistansın. ASLA düşünce süreci, kural analizi, 'Input text:', 'Task:', 'Constraint', açıklama veya yorum yazma. Yanıtın SADECE ve DOĞRUDAN biçimlendirilmiş metnin kendisi olmalıdır."
-              }]
-            },
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0.0
-            }
-          }),
-        });
+      const endpoints = [
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`,
+        `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${cleanKey}`
+      ];
 
-        if (response.ok) {
-          const data = await response.json();
-          const candidate = data.candidates?.[0];
-          if (candidate?.content?.parts) {
-            // Sadece düşünce (thought) OLMAYAN gerçek içerik parçalarını birleştir
-            const nonThoughtParts = candidate.content.parts.filter((p: any) => !p.thought);
-            const text = nonThoughtParts.map((p: any) => p.text || "").join("").trim();
-            if (text) {
-              if (activeAiModel !== model) {
-                setActiveAiModel(model);
-                if (typeof window !== "undefined") {
-                  localStorage.setItem("bt_gemini_active_model", model);
-                }
+      for (const url of endpoints) {
+        try {
+          const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              systemInstruction: {
+                parts: [{
+                  text: "Sen Burak Turizm için sadece HTML biçimlendirme yapan bir asistansın. ASLA düşünce süreci, kural analizi, 'Input text:', 'Task:', 'Constraint', açıklama veya yorum yazma. Yanıtın SADECE ve DOĞRUDAN biçimlendirilmiş metnin kendisi olmalıdır."
+                }]
+              },
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature: 0.0
               }
-              return text;
+            }),
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            const candidate = data.candidates?.[0];
+            if (candidate?.content?.parts) {
+              const nonThoughtParts = candidate.content.parts.filter((p: any) => !p.thought);
+              const text = nonThoughtParts.map((p: any) => p.text || "").join("").trim();
+              if (text) {
+                if (activeAiModel !== model) {
+                  setActiveAiModel(model);
+                  if (typeof window !== "undefined") {
+                    localStorage.setItem("bt_gemini_active_model", model);
+                  }
+                }
+                return text;
+              }
             }
+          } else {
+            const errData = await response.json().catch(() => ({}));
+            const msg = errData.error?.message || response.statusText;
+            lastError = `${model}: ${msg}`;
           }
-        } else {
-          const errData = await response.json().catch(() => ({}));
-          const msg = errData.error?.message || response.statusText;
-          lastError = `${model}: ${msg}`;
-          console.warn(`Gemini (${model}) başarısız, sonraki modele geçiliyor:`, msg);
+        } catch (e: any) {
+          lastError = `${model}: ${e.message}`;
         }
-      } catch (e: any) {
-        lastError = `${model}: ${e.message}`;
-        console.warn(`Gemini (${model}) bağlantı hatası, sonraki modele geçiliyor:`, e.message);
       }
     }
 
@@ -1882,7 +1915,12 @@ ${d.content}`;
       setTimeout(() => setImportMessage(null), 5000);
       setIsAiModalOpen(false);
     } catch (err: any) {
-      alert("Yapay zeka analizinde hata oluştu: " + err.message);
+      console.warn("Yapay zeka analizinde hata oluştu:", err.message);
+      // Hata durumunda otomatik yerel kural motorunu çalıştır
+      handleApplyLocalAutoBoldAllDays();
+      setImportMessage("ℹ️ Google API modellerine anlık ulaşılamadı. Tur programı yerel kural motoruyla (Mod A) saniyesinde başarıyla tamamlandı.");
+      setTimeout(() => setImportMessage(null), 5000);
+      setIsAiModalOpen(false);
     } finally {
       setIsAiLoading(false);
     }
