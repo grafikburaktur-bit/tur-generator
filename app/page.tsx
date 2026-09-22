@@ -627,11 +627,14 @@ export default function TurOlusturucu() {
       }
     });
 
-    // 2. Sefer Kodları (TK266, TK0252, vb.)
-    res = res.replace(/(?<!<b>)\b([A-Z]{2}\s*\d{3,4})\b(?!<\/b>)/g, "<b>$1</b>");
+    // 2. Sefer Kodları (TK179, TK8, TK266, PC123 vb. - 1 ila 4 basamaklı)
+    res = res.replace(/(?<!<b>)\b([A-Z]{2}\s*\d{1,4})\b(?!<\/b>)/g, "<b>$1</b>");
 
-    // 3. Saatler (01.30’da, 07.45, 18.05 vb.)
-    res = res.replace(/(?<!<b>)\b(\d{1,2}\.\d{2}(?:['’][a-zçğıöşü]+)?)\b(?!<\/b>)/gi, "<b>$1</b>");
+    // 2.1 Uçuş Süreleri: (13sa 40dk), (4sa 15dk), (5sa 30dk) vb.
+    res = res.replace(/(?<!<b>)(\(\s*\d+\s*sa(?:at)?(?:\s*\d+\s*dk(?:ika)?)?\s*\))(?!<\/b>)/gi, "<b>$1</b>");
+
+    // 3. Saatler (05.10’da, 21.45’te, 15.00, 08:30, 23.59'te vb.)
+    res = res.replace(/(?<!<b>)\b(\d{1,2}[.:]\d{2}(?:[’'][a-zçğıöşü]+)?)(?!<\/b>)/gi, "<b>$1</b>");
 
     // 4. Havalimanı / Terminal Kalıpları
     res = res.replace(/(?<!<b>)\b([A-ZÇĞİÖŞÜ][a-zA-ZçğıöşüÇĞİÖŞÜ\s]+(?:Havalimanı(?:’?[a-zçğıöşü]+)?|Havaalanı(?:’?[a-zçğıöşü]+)?|Dış Hatlar Terminali))\b(?!<\/b>)/g, "<b>$1</b>");
@@ -1095,12 +1098,17 @@ export default function TurOlusturucu() {
           };
         });
 
+        // İçe aktarmada saatleri, seferleri ve mekanları otomatik kalınlaştır
+        const enrichedContent = autoBoldOnImport
+          ? autoBoldDayContent(dayRaw, [detectedTitle, detectedSubtitle, cleanRouteStr, ...stops])
+          : dayRaw;
+
         parsedDays.push({
           id: i + 1,
           type: m.dayNum ? "day" : "meeting",
           dayTitle: m.dayNum ? `${m.dayNum}. Gün` : "Buluşma",
           routes: routes,
-          content: dayRaw, // Bold <b>...</b> tagleri içeride korunmuş olarak kalır!
+          content: enrichedContent,
           imageUrl: "",
           notes: notes,
         });
@@ -1899,7 +1907,7 @@ ${includedServices.join("\n")}`;
       const updatedDays = await Promise.all(
         days.map(async (d) => {
           try {
-            const dayPrompt = `Aşağıdaki tur metnindeki tarihi ve dini mekanları (türbeler, külliyeler, camiler, medreseler, tapınaklar, saraylar, müzeler, oteller vb.), uçuşları ve saatleri <b>...</b> etiketi ile kalınlaştır. Kelimeleri değiştirme. Sadece metni döndür.
+            const dayPrompt = `Aşağıdaki tur metnindeki tarihi ve dini mekanları, uçuş/sefer kodlarını (örn: TK179, TK8), uçuş sürelerini (örn: 13sa 40dk) ve ÖZELLİKLE TÜM SAATLERİ (örn: 05.10'da, 21.45'te, 15.00, 08.10) <b>...</b> etiketi ile kalınlaştır. Kelimeleri değiştirme. Sadece metni döndür.
 Metin:
 ${d.content}`;
             const bolded = await callGeminiAi(geminiApiKey, dayPrompt);
